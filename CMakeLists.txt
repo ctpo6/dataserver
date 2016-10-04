@@ -247,3 +247,29 @@ source_group(maketable FILES ${SDL_SOURCE_MAKETABLE} ${SDL_HEADER_MAKETABLE} )
 add_library( dataserver STATIC ${SDL_SOURCE_FILES} ${SDL_HEADER_FILES} )
 add_executable( test_dataserver ${SDL_SOURCE_FILES} ${SDL_HEADER_FILES} ${SDL_SOURCE_SOFTWARE} )
 
+
+###############################################################################
+
+include(ExternalProject)
+ExternalProject_Add(dataserver_ci_test
+    DEPENDS dataserver
+    PREFIX ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test
+
+    GIT_REPOSITORY https://github.com/ctpo6/dataserver_ci_test.git
+    TIMEOUT 10
+
+    UPDATE_COMMAND git pull
+
+#    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/psi4
+    CONFIGURE_COMMAND ""
+    CMAKE_ARGS 
+              -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+              -DDATASERVER_DIR=${PROJECT_SOURCE_DIR}
+
+    BUILD_COMMAND ""
+
+    INSTALL_COMMAND ""
+#    INSTALL_COMMAND ${CMAKE_MAKE_PROGRAM} install DESTDIR=${CMAKE_BINARY_DIR}/stage
+
+    LOG_DOWNLOAD ON
+)
