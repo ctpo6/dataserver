@@ -1,0 +1,3 @@
+[submodule "external/dataserver_ci_test"]
+	path = external/dataserver_ci_test
+	url = https://github.com/ctpo6/dataserver_ci_test.git
