@@ -261,15 +261,26 @@ ExternalProject_Add(dataserver_ci_test
     UPDATE_COMMAND git pull
 
 #    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/psi4
-    CONFIGURE_COMMAND ""
+#    CONFIGURE_COMMAND ""
     CMAKE_ARGS 
               -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
               -DDATASERVER_DIR=${PROJECT_SOURCE_DIR}
 
-    BUILD_COMMAND ""
+    BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test/build
 
     INSTALL_COMMAND ""
-#    INSTALL_COMMAND ${CMAKE_MAKE_PROGRAM} install DESTDIR=${CMAKE_BINARY_DIR}/stage
+#    INSTALL_COMMAND ${CMAKE_MAKE_PROGRAM} install DESTDIR=${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test
 
-    LOG_DOWNLOAD ON
+    BUILD_ALWAYS 1
+
+    LOG_DOWNLOAD 1
+    LOG_CONFIGURE 1
+    LOG_BUILD 1
 )
+
+ExternalProject_Get_Property(dataserver_ci_test binary_dir install_dir)
+message(STATUS "binary_dir: ${binary_dir}")
+message(STATUS "install_dir: ${install_dir}")
+
+enable_testing()
+add_test(test1 ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test/build/${CMAKE_BUILD_TYPE}/dataserver_ci_test)

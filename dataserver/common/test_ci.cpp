@@ -2,7 +2,7 @@ namespace sdl {
 namespace test_ci {
 int foo()
 {
-    return 1;
+    return 16;
 }
 }
 }
