@@ -27,4 +27,6 @@
 #include "format.h"
 #include "quantity.h"
 
+#include "test_ci.h"
+
 #endif // __SDL_COMMON_COMMON_H__
