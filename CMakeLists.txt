@@ -283,4 +283,4 @@ message(STATUS "binary_dir: ${binary_dir}")
 message(STATUS "install_dir: ${install_dir}")
 
 enable_testing()
-add_test(test1 ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test/build/${CMAKE_BUILD_TYPE}/dataserver_ci_test)
+add_test(test1 ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test/build/Debug/dataserver_ci_test)
