@@ -280,4 +280,4 @@ ExternalProject_Add(dataserver_ci_test
 #message(STATUS "install_dir: ${install_dir}")
 
 enable_testing()
-add_test(test1 ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test/build/Debug/dataserver_ci_test)
+add_test(NAME test1 COMMAND ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test/build/$<CONFIG>/dataserver_ci_test)
