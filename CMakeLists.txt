@@ -250,34 +250,34 @@ add_executable( test_dataserver ${SDL_SOURCE_FILES} ${SDL_HEADER_FILES} ${SDL_SO
 
 ###############################################################################
 
-include(ExternalProject)
-ExternalProject_Add(dataserver_ci_test
-    DEPENDS dataserver
-    PREFIX ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test
+#include(ExternalProject)
+#ExternalProject_Add(dataserver_ci_test
+#    DEPENDS dataserver
+#    PREFIX ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test
 
-    GIT_REPOSITORY https://github.com/ctpo6/dataserver_ci_test.git
-    TIMEOUT 10
+#    GIT_REPOSITORY https://github.com/ctpo6/dataserver_ci_test.git
+#    TIMEOUT 10
 
-    UPDATE_COMMAND git pull
+#    UPDATE_COMMAND git pull
 
-    CMAKE_ARGS 
-              -DDATASERVER_DIR=${PROJECT_SOURCE_DIR}    # make use our dataserver code, not the external from github
+#    CMAKE_ARGS 
+#              -DDATASERVER_DIR=${PROJECT_SOURCE_DIR}    # make use our dataserver code, not the external from github
 
-    BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test/build
+#    BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test/build
 
-    INSTALL_COMMAND ""
+#    INSTALL_COMMAND ""
 
-    BUILD_ALWAYS 1      # need it because I don't know how to tell cmake to track changes in our dataserver code;
+#    BUILD_ALWAYS 1      # need it because I don't know how to tell cmake to track changes in our dataserver code;
                         # without this line, dataserver_ci_test isn't being rebuilt on dataserver changes
 
-    LOG_DOWNLOAD 1
-    LOG_CONFIGURE 1
-    LOG_BUILD 1
-)
+#    LOG_DOWNLOAD 1
+#    LOG_CONFIGURE 1
+#    LOG_BUILD 1
+#)
 
 #ExternalProject_Get_Property(dataserver_ci_test binary_dir install_dir)
 #message(STATUS "binary_dir: ${binary_dir}")
 #message(STATUS "install_dir: ${install_dir}")
 
-enable_testing()
-add_test(NAME test1 COMMAND ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test/build/$<CONFIG>/dataserver_ci_test)
+#enable_testing()
+#add_test(NAME test1 COMMAND ${CMAKE_CURRENT_BINARY_DIR}/dataserver_ci_test/build/$<CONFIG>/dataserver_ci_test)
