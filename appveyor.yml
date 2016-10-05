@@ -20,15 +20,11 @@ build_script:
 - cmake -G "Visual Studio 14 Win64" ..
 - cmake --build .
 
-before_test:
+test_script:
 - git clone https://github.com/ctpo6/dataserver_ci_test.git test
 - cd test
 - mkdir build
 - cd build
 - cmake -G "Visual Studio 14 Win64" -DDATASERVER_DIR=c:\work\dataserver ..
 - cmake --build .
-
-test_script:
-- cd test
-- cd build
 - ctest -VV -C debug
