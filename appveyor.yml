@@ -29,4 +29,4 @@ test_script:
 - cd build
 - cmake -G "Visual Studio 14 Win64" -DDATASERVER_DIR=c:\work\dataserver ..
 - cmake --build .
-- ctest -VV -C debug
+- ctest -V -C debug
