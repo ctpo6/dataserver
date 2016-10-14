@@ -7,7 +7,7 @@ SUPPORTED PLATFORMS
 Platforms:
 
 *   **Linux** [![Build Status](https://travis-ci.org/Totopolis/dataserver.svg?branch=master)](https://travis-ci.org/Totopolis/dataserver)
-*   **Windows** [![Build status](https://ci.appveyor.com/api/projects/status/r0xsqmreyx14xmbp?svg=true)](https://ci.appveyor.com/project/Totopolis/dataserver)
+*   **Windows** [![Build status](https://ci.appveyor.com/api/projects/status/qo5fs7e9ld9wcnxx?svg=true)](https://ci.appveyor.com/project/ctpo6/dataserver-ao4tj)
 *   **OS X** [![Build Status](https://travis-ci.org/Totopolis/dataserver.svg?branch=master)](https://travis-ci.org/Totopolis/dataserver)
 *   **FreeBSD**
 
