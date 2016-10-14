@@ -11,9 +11,9 @@ namespace sdl { namespace db {
 geo_mem::geo_mem(data_type && m): m_data(std::move(m)) {
     init_geography();
     m_type = init_type();
-    //static_assert(sizeof(vec_orientation) == 32, ""); // 16+8+8 = 32
     SDL_ASSERT(m_type != spatial_type::null);
     init_ring_orient();
+    SDL_ASSERT_DEBUG_2(STGeometryType() != geometry_types::Unknown);
 }
 
 const geo_mem &
@@ -126,16 +126,19 @@ spatial_type geo_mem::init_type()
     return spatial_type::null;
 }
 
-std::string geo_mem::STAsText() const {
-    if (!is_null()) {
-        return to_string::type(*this);
+std::string geo_mem::STAsText() const
+{
+    if (is_null()) {
+        return {}; 
     }
-    SDL_ASSERT(0);
-    return{};
+    return to_string::type(*this);
 }
 
 bool geo_mem::STContains(spatial_point const & p) const
 {
+    if (is_null()) {
+        return false; 
+    }
     switch (m_type) {
     case spatial_type::point:
         return cast_point()->is_equal(p);
@@ -153,58 +156,63 @@ bool geo_mem::STContains(spatial_point const & p) const
             return false;
         }
     default:
-        return false; // not implemented or is_null()
+        SDL_WARNING(!"not implemented");
+        return false;
     }
 }
 
 bool geo_mem::STIntersects(spatial_rect const & rc) const
 {
-    if (!is_null()) {
-        switch (m_type) {
-        case spatial_type::point:
-            return transform::STIntersects(rc, cast_point()->data.point);
-        case spatial_type::linestring:
-            return transform::STIntersects(rc, *cast_linestring(), intersect_type::linestring);
-        case spatial_type::polygon:
-            return transform::STIntersects(rc, *cast_polygon(), intersect_type::polygon);
-        case spatial_type::linesegment:
-            return transform::STIntersects(rc, *cast_linesegment(), intersect_type::linestring);
-        case spatial_type::multilinestring:
-            for (size_t i = 0, num = numobj(); i < num; ++i) {
-                if (transform::STIntersects(rc, get_subobj(i), intersect_type::linestring)) {
-                    return true;
-                }
+    if (is_null()) {
+        return false; 
+    }
+    switch (m_type) {
+    case spatial_type::point:
+        return transform::STIntersects(rc, cast_point()->data.point);
+    case spatial_type::linestring:
+        return transform::STIntersects(rc, *cast_linestring(), intersect_type::linestring);
+    case spatial_type::polygon:
+        return transform::STIntersects(rc, *cast_polygon(), intersect_type::polygon);
+    case spatial_type::linesegment:
+        return transform::STIntersects(rc, *cast_linesegment(), intersect_type::linestring);
+    case spatial_type::multilinestring:
+        for (size_t i = 0, num = numobj(); i < num; ++i) {
+            if (transform::STIntersects(rc, get_subobj(i), intersect_type::linestring)) {
+                return true;
             }
-            break;
-        case spatial_type::multipolygon: {
-                auto const & orient = ring_orient();
-                for (size_t i = 0, num = numobj(); i < num; ++i) {
-                    if (orient[i] == orientation::exterior) {
-                        if (transform::STIntersects(rc, get_subobj(i), intersect_type::polygon)) {
-                            return true;
-                        }
+        }
+        break;
+    case spatial_type::multipolygon: {
+            auto const & orient = ring_orient();
+            for (size_t i = 0, num = numobj(); i < num; ++i) {
+                if (orient[i] == orientation::exterior) {
+                    if (transform::STIntersects(rc, get_subobj(i), intersect_type::polygon)) {
+                        return true;
                     }
                 }
             }
-            break;
-        default:
-            SDL_ASSERT(0);
-            break;
         }
+        break;
+    default:
+        SDL_ASSERT(0);
+        break;
     }
     return false;
 }
 
 Meters geo_mem::STDistance(spatial_point const & where) const
 {
+    if (is_null()) {
+        return 0; 
+    }
     if (const size_t num = numobj()) { // multilinestring | multipolygon
         SDL_ASSERT(num > 1);
         if (m_type == spatial_type::multipolygon) {
-            return transform::STDistance(get_subobj(0), where, intersect_type::polygon);
+            return transform::STDistance(get_exterior(), where, intersect_type::polygon);
         }
         else {
             SDL_ASSERT(m_type == spatial_type::multilinestring);
-            Meters min_dist = transform::STDistance(get_subobj(0), where, intersect_type::linestring);
+            Meters min_dist = transform::STDistance(get_exterior(), where, intersect_type::linestring);
             for (size_t i = 1; i < num; ++i) {
                 const Meters d = transform::STDistance(get_subobj(i), where, intersect_type::linestring);
                 if (d.value() < min_dist.value()) {
@@ -228,6 +236,38 @@ Meters geo_mem::STDistance(spatial_point const & where) const
             SDL_ASSERT(0); 
             return 0;
         }
+    }
+}
+
+Meters geo_mem::STLength() const
+{
+    if (is_null()) {
+        return 0; 
+    }
+    switch (m_type) {
+    case spatial_type::point: 
+        return 0;
+    case spatial_type::linestring:
+        return transform::STLength(*cast_linestring());
+    case spatial_type::polygon: 
+        return transform::STLength(*cast_polygon());
+    case spatial_type::linesegment:
+        return transform::STLength(*cast_linesegment());
+    case spatial_type::multilinestring:
+    case spatial_type::multipolygon:
+        if (const size_t num = numobj()) { // multilinestring | multipolygon
+            SDL_ASSERT(num > 1);
+            Meters length = transform::STLength(get_exterior());
+            for (size_t i = 1; i < num; ++i) {
+                length += transform::STLength(get_subobj(i));
+            }
+            return length;
+        }
+        SDL_ASSERT(0); 
+        return 0;
+    default:
+        SDL_ASSERT(0); 
+        return 0;
     }
 }
 
@@ -275,7 +315,7 @@ void geo_mem::init_ring_orient()
         const size_t size = tail->size();
         reset_new(m_ring_orient, size, orientation::exterior);
         vec_orientation & result = *m_ring_orient;
-        point_access exterior = get_subobj(0);
+        point_access exterior = get_exterior();
         for (size_t i = 1; i < size; ++i) {
             point_access next = get_subobj(i);
             SDL_ASSERT(is_exterior(result[0]));
@@ -298,6 +338,17 @@ void geo_mem::init_ring_orient()
             }
         }
         SDL_ASSERT(result.size() == numobj());
+#if 0 //SDL_DEBUG
+        {
+            SDL_TRACE();
+            size_t i = 0;
+            for (auto v : result) {
+                int const tag = (i == 0) ? 0 : int(tail->get(i - 1).tag);
+                SDL_TRACE("[", i, "]", is_exterior(v) ? " exterior" : " interior", ",tag=", tag);
+                ++i;
+            }
+        }
+#endif
     }
 }
 
@@ -336,6 +387,23 @@ bool geo_mem::multiple_exterior() const
         }
     }
     return false;
+}
+
+geometry_types geo_mem::STGeometryType() const
+{
+    switch (m_type) {
+    case spatial_type::point:           return geometry_types::Point;
+    case spatial_type::linestring:      return geometry_types::LineString;
+    case spatial_type::linesegment:     return geometry_types::LineString;
+    case spatial_type::polygon:         return geometry_types::Polygon;
+    case spatial_type::multilinestring: return geometry_types::MultiLineString;
+    case spatial_type::multipolygon:
+        return multiple_exterior() ? geometry_types::MultiPolygon : geometry_types::Polygon;
+    default:
+        SDL_ASSERT(m_type == spatial_type::null);
+        break;
+    }
+    return geometry_types::Unknown;
 }
 
 //------------------------------------------------------------------------

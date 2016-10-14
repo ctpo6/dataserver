@@ -48,8 +48,9 @@ struct dbo_%s{name}_META {
     };
     typedef TL::Seq<%s{INDEX_LIST}
     >::Type index_list;%s{CLUSTER_INDEX}
-    static const char * name() { return "%s{name}"; }
-    static const int32 id = %s{schobj_id};
+    static constexpr char * name() { return "%s{name}"; }
+    static constexpr int32 id = %s{schobj_id};
+    static constexpr int32 nsid = %s{nsid_id};
     using spatial_index = %s{spatial_index};
 };
 
@@ -67,7 +68,7 @@ public:
         record(this_table const * p, row_head const * h): base(p, h) {}
     public:
         record() = default;%s{REC_TEMPLATE}
-    };
+    };%s{static_record_count}
 private:
     record::access const _record;
 public:
@@ -89,16 +90,19 @@ const char KEY_TEMPLATE[] = R"(, meta::key<%s{PK}, %s{key_pos}, sortorder::%s{ke
 const char SPATIAL_KEY[] = R"(, meta::spatial_key)";
 
 const char COL_TEMPLATE[] = R"(
-        struct %s{col_name} : meta::col<%s{col_place}, %s{col_off}, scalartype::t_%s{col_type}, %s{col_len}%s{KEY_TEMPLATE}> { static const char * name() { return "%s{col_name}"; } };)";
+        struct %s{col_name} : meta::col<%s{col_place}, %s{col_off}, scalartype::t_%s{col_type}, %s{col_len}%s{KEY_TEMPLATE}> { static constexpr char * name() { return "%s{col_name}"; } };)";
 
 const char REC_TEMPLATE[] = R"(
         auto %s{col_name}() const -> col::%s{col_name}::ret_type { return val<col::%s{col_name}>(); })";
 
 const char INDEX_TEMPLATE[] = R"(
-        struct %s{index_name} : meta::idxstat<%s{schobj_id}, %s{index_id}, idxtype::%s{idxtype}> { static const char * name() { return "%s{index_name}"; } };)";
+        struct %s{index_name} : meta::idxstat<%s{schobj_id}, %s{index_id}, idxtype::%s{idxtype}> { static constexpr char * name() { return "%s{index_name}"; } };)";
 
 const char INDEX_LIST[] = R"(
         index::%s{index_name} /*[%d]*/)";
+
+const char STATIC_RECORD_COUNT[] = R"(
+    static constexpr size_t static_record_count = %d; /*%s{table}*/)";
 
 const char VOID_CLUSTER_INDEX[] = R"(
     using clustered = void;)";
@@ -115,7 +119,7 @@ const char CLUSTER_INDEX[] = R"(
             using this_clustered = clustered;
         };
 #pragma pack(pop)
-        static const char * name() { return "%s{index_name}"; }
+        static constexpr char * name() { return "%s{index_name}"; }
         static bool is_less(key_type const & x, key_type const & y) {%s{key_less}
             return false;
         }
@@ -149,7 +153,7 @@ const char DATABASE_TABLE_LIST[] = R"(
 struct database_table_list {
     typedef TL::Seq<%s{TYPE_LIST}
     >::Type type_list;
-    static const char * name() { return "%s{dbi_dbname}"; }
+    static constexpr char * name() { return "%s{dbi_dbname}"; }
 };
 )";
 
@@ -160,13 +164,14 @@ const char TABLE_NAME[] = R"(
 
 //-------------------------------------------------------------------------------------------
 
-std::string generator::make_table(database const & db, datatable const & table)
+std::string generator::make_table(database const & db, datatable const & table, const bool is_record_count)
 {
     std::string s(MAKE_TEMPLATE);
 
     const usertable & tab = table.ut();
     replace(s, "%s{name}", tab.name());
     replace(s, "%s{schobj_id}", tab.get_id()._32);
+    replace(s, "%s{nsid_id}", tab.get_nsid()._32);
     {
         std::string s_columns;
         std::string s_type_list;
@@ -283,14 +288,44 @@ std::string generator::make_table(database const & db, datatable const & table)
     else {
         replace(s, "%s{spatial_index}", "void");
     }
+    if (is_record_count) {
+        std::string s_record_count(STATIC_RECORD_COUNT);
+        replace(s_record_count, "%d", table._record.count());
+        replace(s_record_count, "%s{table}", table.name());
+        replace(s, "%s{static_record_count}", s_record_count);
+    }
+    else {
+        replace(s, "%s{static_record_count}", "");
+    }
     SDL_ASSERT(s.find("%s{") == std::string::npos);
     return s;
+}
+
+namespace {
+    template<class vector_string, class fun_type>
+    void for_datatables(database const & db,
+                        vector_string const & include,
+                        vector_string const & exclude,
+                        fun_type && fun)
+    {
+        for (auto const & p : db._datatables) {
+            A_STATIC_CHECK_TYPE(shared_datatable const &, p);
+            if (!util::is_find(exclude, p->name())) {
+                if (include.empty() || util::is_find(include, p->name())) {
+                    fun(*p, true);
+                    continue;
+                }
+            }
+            fun(*p, false);
+        }
+    }
 }
 
 bool generator::make_file_ex(database const & db, std::string const & out_file,
                              vector_string const & include,
                              vector_string const & exclude,
-                             const char * const _namespace)
+                             const char * const _namespace,
+                             const bool is_record_count)
 {
     if (!out_file.empty()) {
         std::ofstream outfile(out_file, std::ofstream::out|std::ofstream::trunc);
@@ -311,25 +346,24 @@ bool generator::make_file_ex(database const & db, std::string const & out_file,
             outfile << s_begin;
             std::string s_table_list;
             size_t table_count = 0;
-            for (auto const & p : db._datatables) {
-                A_STATIC_CHECK_TYPE(shared_datatable const &, p);
-                if (!util::is_find(exclude, p->name())) {
-                    if (include.empty() || util::is_find(include, p->name())) {
-                        SDL_TRACE("make: ", p->name());
-                        outfile << generator::make_table(db, *p);
+            for_datatables(db, include, exclude, [&outfile, &db, &table_count, &s_table_list, is_record_count]
+                (datatable const & table, bool const is_include){
+                    if (is_include) {
+                        SDL_TRACE("make: ", table.name());
+                        outfile << generator::make_table(db, table, is_record_count);
                         {
                             std::string s(TABLE_NAME);
                             if (table_count) s_table_list += ",";
-                            replace(s, "%s{name}", p->name());
+                            replace(s, "%s{name}", table.name());
                             replace(s, "%d", table_count);
                             s_table_list += s;
                             ++table_count;
                         }
-                        continue;
                     }
-                }
-                SDL_TRACE("exclude: ", p->name());
-            }
+                    else {
+                        SDL_TRACE("exclude: ", table.name());
+                    }
+                });
             if (table_count) {
                 std::string s_tables(DATABASE_TABLE_LIST);
                 replace(s_tables, "%s{TYPE_LIST}", s_table_list);
@@ -359,6 +393,25 @@ bool generator::make_file_ex(database const & db, std::string const & out_file,
 bool generator::make_file(database const & db, std::string const & out_file, const char * const _namespace)
 {
     return make_file_ex(db, out_file, {}, {}, _namespace);
+}
+
+std::string generator::make_tables(database const & db, 
+    vector_string const & include,
+    vector_string const & exclude,
+    const bool is_record_count)
+{
+    std::stringstream ss;
+    for_datatables(db, include, exclude, 
+        [&db, &ss, is_record_count](datatable const & table, bool const is_include) {
+            if (is_include) {
+                SDL_TRACE("make: ", table.name());
+                ss <<  generator::make_table(db, table, is_record_count);
+            }
+            else {
+                SDL_TRACE("exclude: ", table.name());
+            }
+    });
+    return ss.str();
 }
 
 } // make

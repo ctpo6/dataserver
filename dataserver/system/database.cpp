@@ -194,7 +194,7 @@ page_head const * database::sysallocunits_head() const
     auto boot = get_bootpage();
     if (boot) {
         auto & id = boot->row->data.dbi_firstSysIndexes;
-        page_head const * h = m_data->pm.load_page(id);
+        page_head const * const h = m_data->pm.load_page(id);
         SDL_ASSERT(h->is_data());
         return h;
     }
@@ -226,7 +226,17 @@ database::get_pfs_page() const
 page_head const *
 database::load_sys_obj(const sysObj id) const 
 {
-    if (auto h = sysallocunits_head()) {
+    if (auto const h = sysallocunits_head()) {
+#if SDL_DEBUG
+        if (0) {
+            const uint32 auid_id = static_cast<uint32>(id);
+            sysallocunits(h).scan_auid(auid_id,
+                [auid_id](sysallocunits::const_pointer p){
+                SDL_ASSERT(p->data.auid.d.id == auid_id);
+                return bc::continue_;
+            });
+        }
+#endif
         if (auto row = sysallocunits(h).find_auid(static_cast<uint32>(id))) {
             return load_page_head(row->data.pgfirst);
         }
@@ -322,7 +332,7 @@ recordID database::load_prev_record(recordID const & r) const
 }
 
 template<class fun_type>
-unique_datatable database::find_table_if(fun_type const & fun) const
+unique_datatable database::find_table_if(fun_type && fun) const
 {
     for (auto const & p : _usertables) {
         const usertable & d = *p.get();
@@ -334,7 +344,7 @@ unique_datatable database::find_table_if(fun_type const & fun) const
 }
 
 template<class fun_type>
-unique_datatable database::find_internal_if(fun_type const & fun) const
+unique_datatable database::find_internal_if(fun_type && fun) const
 {
     for (auto const & p : _internals) {
         const usertable & d = *p.get();
@@ -382,7 +392,7 @@ shared_usertable database::find_table_schema(schobj_id const id) const
             return p;
         }
     }
-    SDL_ASSERT(!"find_table_schema");
+    throw_error<database_error>("cannot find table schema");
     return {};
 }
 
@@ -393,7 +403,7 @@ shared_usertable database::find_internal_schema(schobj_id const id) const
             return p;
         }
     }
-    SDL_ASSERT(!"find_internal_schema");
+    throw_error<database_error>("cannot find internal schema");
     return {};
 }
 
@@ -518,22 +528,22 @@ database::find_sysalloc(schobj_id const id, dataType::type const data_type) cons
     }
     shared_sysallocunits shared_result(new vector_sysallocunits_row);
     auto & result = *shared_result;
-    auto push_back = [data_type, &result](sysallocunits_row const * const row) {
-        if (row->data.type == data_type) {
-            if (std::find(result.begin(), result.end(), row) == result.end()) {
-                result.push_back(row);
-            }
-            else {
-                SDL_ASSERT(0);
-            }
-        }
-    };
-    for_row(_sysidxstats, [this, id, push_back](sysidxstats::const_pointer idx) {
+    for_row(_sysidxstats, [this, id, data_type, &result](sysidxstats::const_pointer idx) {
         if ((idx->data.id == id) && !idx->data.rowset.is_null()) {
             for_row(_sysallocunits, 
-                [idx, push_back](sysallocunits::const_pointer row) {
-                    if (row->data.ownerid == idx->data.rowset) {
-                        push_back(row);
+                [this, idx, data_type, &result](sysallocunits::const_pointer row) {
+                    if (row->data.pgfirstiam) {
+                        if ((row->data.ownerid == idx->data.rowset) && (row->data.type == data_type)) {
+                            if (!algo::is_find(result, row)) {
+                                result.push_back(row);
+                            }
+                            else {
+                                SDL_ASSERT(!"push unique"); // to be tested
+                            }
+                        }
+                    }
+                    else {
+                        //SDL_TRACE("\nfind_sysalloc id=", idx->data.id._32, " name=", col_name_t(idx));
                     }
             });
         }
@@ -552,31 +562,30 @@ database::load_pg_index(schobj_id const id, pageType::type const page_type) cons
         }
     }
     pgroot_pgfirst result{};
-    auto const sysalloc = find_sysalloc(id, dataType::type::IN_ROW_DATA);
-    for (auto alloc : *sysalloc) {
-        A_STATIC_CHECK_TYPE(sysallocunits_row const *, alloc);
+    auto const & sysalloc = find_sysalloc(id, dataType::type::IN_ROW_DATA);
+    for (auto const alloc : *sysalloc) {
+        A_STATIC_CHECK_TYPE(sysallocunits_row const * const, alloc);
+        SDL_ASSERT(alloc->data.pgfirstiam);
         if (alloc->data.pgroot && alloc->data.pgfirst) { // root page of the index tree
-            auto const pgroot = load_page_head(alloc->data.pgroot); // load index page
-            if (pgroot) {
-                auto const pgfirst = load_page_head(alloc->data.pgfirst); // ask for data page
-                if (pgfirst && (pgfirst->data.type == page_type)) {
-                    SDL_ASSERT(is_allocated(alloc->data.pgroot));
-                    SDL_ASSERT(is_allocated(alloc->data.pgfirst));
-                    if (pgroot->is_index()) {
-                        SDL_ASSERT(pgroot != pgfirst);
-                        result = { pgroot, pgfirst };
-                        break;
+            if (is_allocated(alloc->data.pgroot) && is_allocated(alloc->data.pgfirst)) { // it is possible that pgfirst is not allocated (and not empty)
+                auto const pgroot = load_page_head(alloc->data.pgroot); // load index page
+                if (pgroot) {
+                    auto const pgfirst = load_page_head(alloc->data.pgfirst); // ask for data page
+                    SDL_ASSERT(pgfirst);
+                    if (pgfirst && (pgfirst->data.type == page_type)) {
+                        if (pgroot->is_index()) {
+                            //SDL_ASSERT(pgroot != pgfirst); it is possible (TSQL2012, dbo_Categories)
+                            result = { pgroot, pgfirst };
+                            break;
+                        }
+                        if (pgroot->is_data() && (pgroot == pgfirst)) {
+                            result = { pgroot, pgfirst };
+                            break;
+                        }
+                        SDL_ASSERT(!"load_pg_index");
                     }
-                    if (pgroot->is_data() && (pgroot == pgfirst)) {
-                        result = { pgroot, pgfirst };
-                        break;
-                    }
-                    SDL_WARNING(0); // to be tested
                 }
             }
-        }
-        else {
-            SDL_ASSERT(!alloc->data.pgroot); // expect pgfirst if pgroot exists
         }
     }
     m_data->set_pg_index(id, page_type, result);
@@ -601,28 +610,31 @@ database::find_datapage(schobj_id const id,
     //TODO: Before we can scan either heaps or indices, we need to know the compression level as that's set at the partition level, and not at the record/page level.
     //TODO: We also need to know whether the partition is using vardecimals.
     if ((data_type == dataType::type::IN_ROW_DATA) && (page_type == pageType::type::data)) {
-        if (auto index = get_cluster_index(id)) { // use cluster index if possible
-            const index_tree tree(this, index);
-            page_head const * const min_page = load_page_head(tree.min_page());
-            page_head const * const max_page = load_page_head(tree.max_page());
-            if (min_page && max_page) {
-                reset_shared<class_clustered_access>(result, this, min_page, max_page);
-                m_data->set_datapage(id, data_type, page_type, result);
-                return result;
+        if (auto const index = get_cluster_index(id)) { // use cluster index if possible
+            if (index->is_root_index()) {
+                const index_tree tree(this, index);
+                page_head const * const min_page = load_page_head(tree.min_page());
+                page_head const * const max_page = load_page_head(tree.max_page());
+                if (min_page && max_page) {
+                    reset_shared<class_clustered_access>(result, this, min_page, max_page);
+                    m_data->set_datapage(id, data_type, page_type, result);
+                    return result;
+                }
+                SDL_ASSERT(0);
             }
-            SDL_ASSERT(0);
-        }
-        else {
-            if (page_head const * p = load_pg_index(id, page_type).pgfirst()) {
-                reset_shared<class_forward_access>(result, this, p);
-                m_data->set_datapage(id, data_type, page_type, result);
-                return result;
+            else {
+                SDL_ASSERT(index->is_root_data());
+                if (page_head const * p = load_pg_index(id, page_type).pgfirst()) {
+                    reset_shared<class_forward_access>(result, this, p);
+                    m_data->set_datapage(id, data_type, page_type, result);
+                    return result;
+                }
             }
         }
     }
     // Heap tables won't have root pages
     vector_page_head heap_pages;
-    auto const & sysalloc = *(this->find_sysalloc(id, data_type));
+    vector_sysallocunits_row const & sysalloc = *find_sysalloc(id, data_type);
     for (auto alloc : sysalloc) {
         A_STATIC_CHECK_TYPE(sysallocunits_row const *, alloc);
         SDL_ASSERT(alloc->data.type == data_type);
@@ -769,7 +781,7 @@ database::get_primary_key(schobj_id const table_id) const
                     }
                 }
                 SDL_ASSERT(idx_col.size() == idx_stat.size());
-                if (slot_array::size( pg.pgroot())) {
+                if (slot_array::size(pg.pgroot())) {
                     reset_new(result, pg.pgroot(), idx,
                         std::move(idx_col),
                         std::move(idx_scal),
@@ -800,10 +812,13 @@ database::get_cluster_index(shared_usertable const & schema) const
     }
     shared_cluster_index result;
     if (auto p = get_primary_key(schema_id)) {
-        if (p->is_index()) {
+        SDL_ASSERT(p->idxstat->is_clustered()); // expected
+        SDL_ASSERT(p->idxstat->IsPrimaryKey());
+        SDL_ASSERT(p->idxstat->IsUnique());
+        if (p->is_index() || p->is_data()) { // is_data() if not enough records for index tree (TSQL2012, dbo_Categories) 
             cluster_index::column_index pos(p->size());
             for (size_t i = 0; i < p->size(); ++i) {
-                const auto col = schema->find_col(p->colpar[i]);
+                const auto & col = schema->find_col(p->colpar[i]);
                 if (col.first) {
                     pos[i] = col.second;
                 }
@@ -898,7 +913,8 @@ database::var_data(row_head const * const row, size_t const i, scalartype::type 
                             for (size_t i = 0; i < link_count; ++i) {
                                 const varchar_overflow_link next(this, page, link + i);
                                 append(varchar.data(), next.begin(), next.end());
-                                SDL_ASSERT(mem_size_n(varchar.data()) == link[i].size);
+                                throw_error_if_not<database_error>(mem_size_n(varchar.data()) == link[i].size,
+                                    "bad varchar_overflow_page"); //FIXME: dbo_COUNTRY.Geoinfo
                             }
                             return varchar.detach();
                         }
@@ -969,13 +985,15 @@ database::find_spatial_alloc(const std::string & index_name) const
 {
     if (!index_name.empty()) {
         if (auto const idx = find_spatial_type(index_name, idxtype::clustered)) {
-            auto const palloc = find_sysalloc(idx->data.id, dataType::type::IN_ROW_DATA);
+            auto const & palloc = find_sysalloc(idx->data.id, dataType::type::IN_ROW_DATA);
             auto const & alloc = *palloc;
             if (!alloc.empty()) {
                 SDL_ASSERT(alloc.size() == 1);
                 SDL_ASSERT(alloc[0] != nullptr);
                 return alloc[0];
             }
+            SDL_WARNING(0);
+            return nullptr; // spatial index is not allocated (table is empty ?)
         }
     }
     SDL_ASSERT(0);
@@ -1027,19 +1045,33 @@ database::find_spatial_tree(schobj_id const table_id) const
         A_STATIC_CHECK_TYPE(sysidxstats_row const *, sroot.second);
         sysallocunits_row const * const root = sroot.first;
         if (root->data.pgroot && root->data.pgfirst) {
+            SDL_ASSERT(is_allocated(root->data.pgroot));
+            SDL_ASSERT(is_allocated(root->data.pgfirst));
             SDL_ASSERT(get_pageType(root->data.pgroot) == pageType::type::index);
             SDL_ASSERT(get_pageType(root->data.pgfirst) == pageType::type::data);
             if (auto const pk0 = get_primary_key(table_id)) {
-                if (auto const pgroot = load_page_head(root->data.pgroot)) {
-                    SDL_ASSERT(1 == pk0->size()); // to be tested
-                    result.pgroot = pgroot;
-                    result.idx = sroot.second;
-                    m_data->set_spatial_tree(table_id, result);
-                    return result;
+                if (1 == pk0->size()) {
+                    if (pk0->is_index()) {
+                        if (auto const pgroot = load_page_head(root->data.pgroot)) {
+                            result.pgroot = pgroot;
+                            result.idx = sroot.second;
+                            m_data->set_spatial_tree(table_id, result);
+                            return result;
+                        }
+                    }
+                    else {
+                        SDL_ASSERT(pk0->is_data()); // possible for small tables
+                    }
                 }
+                else {
+                    SDL_ASSERT(pk0->size() > 1);
+                    SDL_TRACE("\nspatial_tree not implemented for composite pk0, id = ", table_id._32);
+                    SDL_WARNING(0);
+                }
+                return {};
             }
         }
-        SDL_WARNING(0); // to be tested
+        SDL_ASSERT(!"find_spatial_tree"); // to be tested
     }
     return {};
 }

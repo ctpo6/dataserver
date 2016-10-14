@@ -228,13 +228,6 @@ spatial_point spatial_rect::operator[](size_t const i) const { // counter-clock 
     }
 }
 
-/*void spatial_rect::get_poly(array_t<spatial_point, 5> & dest) const {
-    for (size_t i = 0; i < 4; ++i) {
-        dest[i] = (*this)[i];
-    }
-    dest[4] = dest[0];
-}*/
-
 } // db
 } // sdl
 
@@ -350,10 +343,12 @@ namespace sdl {
                         p2 = SP::init(Latitude(90), Longitude(45));
                         SDL_ASSERT(p1.match(p2));
                     }
+#if high_grid_optimization
                     static_assert(cell_capacity<spatial_cell::depth_4>::value == 256, "");
                     static_assert(cell_capacity<spatial_cell::depth_3>::value == 256 * 256, "");
                     static_assert(cell_capacity<spatial_cell::depth_2>::value == 256 * 256 * 256, "");
                     static_assert(cell_capacity<spatial_cell::depth_1>::value64 == uint64(256) * 256 * 256 * 256, "");
+#endif
                     static_assert(sizeof(spatial_grid_high<true>) == 1, "");
                     static_assert(sizeof(spatial_grid_high<false>) == 4, "");
                 }
@@ -364,6 +359,3 @@ namespace sdl {
 } // sdl
 #endif //#if SV_DEBUG
 
-/*inline constexpr uint32 spatial_cell::capacity(size_t const depth) {
-    return uint32(~(uint64(0xFFFFFF00) << ((4 - depth) << 3)));
-}*/

@@ -22,6 +22,7 @@ struct to_string: is_static {
     static const char * type_name(pfs_full);
     static const char * type_name(sortorder);
     static const char * type_name(spatial_type);
+    static const char * type_name(geometry_types);
     static const char * obj_name(obj_code);
 
     static std::string type(pageType);
@@ -50,6 +51,7 @@ struct to_string: is_static {
     static std::string type(text_pointer const &);
     static std::string type(recordID const &);
     static std::string type(schobj_id id) { return to_string::type(id._32); }
+    static std::string type(nsid_id id) { return to_string::type(id._32); }
     static std::string type(index_id id) { return to_string::type(id._32); }
     static std::string type(column_xtype id) { return to_string::type(id._8); }
     static std::string type(column_id id) { return to_string::type(id._32); }
@@ -76,7 +78,10 @@ struct to_string: is_static {
     static std::string type(nchar_t const(&buf)[buf_size]) {
         return type(buf, buf_size);
     }
-
+    template<int size>
+    static std::string type(numeric_t<size> const & v) {
+        return dump_mem(&v, sizeof(v));
+    }
     static std::string type_raw(char const * buf, size_t buf_size);
     static std::string type_raw(char const * buf, size_t buf_size, type_format);
 
@@ -155,6 +160,18 @@ struct to_string: is_static {
     }
     static std::string type(var_mem const & v) {
         return dump_mem(v);
+    }
+    static std::string type(var_mem_t<scalartype::t_text> const & v) {
+        return make_text(v);
+    }
+    static std::string type(var_mem_t<scalartype::t_ntext> const & v) {
+        return make_ntext(v);
+    }
+    static std::string type(var_mem_t<scalartype::t_varchar> const & v) {
+        return make_text(v);
+    }
+    static std::string type(var_mem_t<scalartype::t_nvarchar> const & v) {
+        return make_ntext(v);
     }
     static std::string trim(std::string &&); // remove leading and trailing spaces
 };

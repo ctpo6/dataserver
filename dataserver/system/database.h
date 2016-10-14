@@ -8,8 +8,8 @@
 
 namespace sdl { namespace db {
 
-class database: noncopyable
-{
+class database: noncopyable {
+public:
     enum class sysObj {
         //sysrscols = 3,
         sysrowsets = 5,
@@ -148,6 +148,7 @@ private:
             SDL_ASSERT(db && alloc);
         }
         iterator begin() const {
+            SDL_ASSERT(db->is_allocated(alloc->data.pgfirstiam));
             return iterator(db, db->load_iam_page(alloc->data.pgfirstiam));
         }
         iterator end() const {
@@ -283,14 +284,14 @@ private:
     page_head const * load_sys_obj(sysObj) const;
 
     template<class T, class fun_type> static
-    void for_row(page_access<T> const & obj, fun_type const & fun) {
+    void for_row(page_access<T> const & obj, fun_type && fun) {
         for (auto & p : obj) {
             p->for_row(fun);
         }
     }
     template<class T, class fun_type> static
     typename T::const_pointer
-    find_if(page_access<T> const & obj, fun_type const & fun) {
+    find_if(page_access<T> const & obj, fun_type && fun) {
         for (auto & p : obj) {
             if (auto found = p->find_if(fun)) {
                 A_STATIC_CHECK_TYPE(typename T::const_pointer, found);
@@ -299,8 +300,8 @@ private:
         }
         return nullptr;
     }   
-    template<class fun_type> unique_datatable find_table_if(fun_type const &) const;
-    template<class fun_type> unique_datatable find_internal_if(fun_type const &) const;
+    template<class fun_type> unique_datatable find_table_if(fun_type &&) const;
+    template<class fun_type> unique_datatable find_internal_if(fun_type &&) const;
 private:
     class pgroot_pgfirst {
         page_head const * m_pgroot = nullptr;  // root page of the index tree
@@ -419,6 +420,7 @@ public:
     }
     template<class T> // T = dbo_table
     std::unique_ptr<T> make_table() const {
+        A_STATIC_CHECK_TYPE(schobj_id::type const, T::id);
         if (auto s = find_table_schema(_schobj_id(T::id))) {
             return sdl::make_unique<T>(this, s);
         }
@@ -447,13 +449,13 @@ private:
     const std::unique_ptr<shared_data> m_data;
 };
 
-template<> struct database::sysObj_t<sysrowsets>      { static const sysObj id = sysObj::sysrowsets; };
-template<> struct database::sysObj_t<sysschobjs>      { static const sysObj id = sysObj::sysschobjs; };
-template<> struct database::sysObj_t<syscolpars>      { static const sysObj id = sysObj::syscolpars; };
-template<> struct database::sysObj_t<sysscalartypes>  { static const sysObj id = sysObj::sysscalartypes; };
-template<> struct database::sysObj_t<sysidxstats>     { static const sysObj id = sysObj::sysidxstats; };
-template<> struct database::sysObj_t<sysiscols>       { static const sysObj id = sysObj::sysiscols; };
-template<> struct database::sysObj_t<sysobjvalues>    { static const sysObj id = sysObj::sysobjvalues; };
+template<> struct database::sysObj_t<sysrowsets>      { static constexpr sysObj id = sysObj::sysrowsets; };
+template<> struct database::sysObj_t<sysschobjs>      { static constexpr sysObj id = sysObj::sysschobjs; };
+template<> struct database::sysObj_t<syscolpars>      { static constexpr sysObj id = sysObj::syscolpars; };
+template<> struct database::sysObj_t<sysscalartypes>  { static constexpr sysObj id = sysObj::sysscalartypes; };
+template<> struct database::sysObj_t<sysidxstats>     { static constexpr sysObj id = sysObj::sysidxstats; };
+template<> struct database::sysObj_t<sysiscols>       { static constexpr sysObj id = sysObj::sysiscols; };
+template<> struct database::sysObj_t<sysobjvalues>    { static constexpr sysObj id = sysObj::sysobjvalues; };
 
 } // db
 } // sdl

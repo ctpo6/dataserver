@@ -13,8 +13,10 @@ datatable::datatable(database const * const p, shared_usertable const & t)
     , _record(this)
     , _head(this)
 {
-    if ((m_primary_key = this->db->get_primary_key(this->get_id()))) {
-        if ((m_cluster_index = this->db->get_cluster_index(this->schema))) {
+    m_primary_key = this->db->get_primary_key(this->get_id());
+    if (m_primary_key) {
+        m_cluster_index = this->db->get_cluster_index(this->schema);
+        if (m_cluster_index && m_cluster_index->is_root_index()) {
             m_index_tree = std::make_shared<index_tree>(this->db, m_cluster_index);
         }
     }
@@ -27,7 +29,50 @@ datatable::head_access::head_access(base_datatable const * p)
     SDL_ASSERT(table);
 }
 
-//------------------------------------------------------------------
+datatable::head_access::iterator
+datatable::head_access::begin() const
+{
+    datarow_iterator it = _datarow.begin();
+    while (it != _datarow.end()) {
+        if (head_access::use_record(it))
+            break;
+        ++it;
+    }
+    return iterator(this, std::move(it));
+}
+
+datatable::page_head_access::iterator
+datatable::page_head_access::make_iterator(datatable const * const tab, pageFileID const & id) const
+{
+    SDL_ASSERT(tab && id);
+    SDL_ASSERT_DEBUG_2(tab->db->find_datapage(tab->get_id(), dataType::type::IN_ROW_DATA, pageType::type::data).get() == this);
+    if (page_head const * h = tab->db->load_page_head(id)) {
+        return iterator(this, page_pos(h, 0));
+    }
+    SDL_ASSERT(0);
+    return this->end();
+}
+
+datatable::datapage_access::iterator
+datatable::datapage_access::make_iterator(datatable const * p, pageFileID const & id) const
+{
+    return page_access->make_iterator(p, id);
+}
+
+datatable::datarow_access::iterator
+datatable::datarow_access::make_iterator(datatable const * p, recordID const & rec) const
+{
+    return iterator(this, page_slot(_datapage.make_iterator(p, rec.id), rec.slot));
+}
+
+datatable::head_access::iterator
+datatable::head_access::make_iterator(datatable const * p, recordID const & rec) const
+{
+    auto it = _datarow.make_iterator(p, rec);
+    SDL_ASSERT(use_record(it));
+    return iterator(this, std::move(it));
+}
+
 #if 0 // reserved
 void datatable::datarow_access::load_prev(page_slot & p)
 {
@@ -280,11 +325,6 @@ std::string datatable::record_type::type_col(col_size_t const i) const
     }
     column const & col = usercol(i);
     if (col.is_fixed()) {
-#if 0 //(SDL_DEBUG > 1)
-        if (col.type == scalartype::t_int) {
-            SDL_ASSERT(cast_fixed_col<scalartype::t_int>(i));
-        }
-#endif
         return type_fixed_col(fixed_memory(col, i), col);
     }
     return type_var_col(col, i);
@@ -353,34 +393,75 @@ datatable::get_PrimaryKeyOrder() const
     return { nullptr, sortorder::NONE };
 }
 
-spatial_tree_idx datatable::find_spatial_tree() const {
+usertable::col_index
+datatable::get_PrimaryKeyCol() const
+{
+    if (m_primary_key) {
+        return this->ut().find_col(m_primary_key->primary());
+    }
+    return{};
+}
+
+spatial_tree_idx datatable::find_spatial_tree() const
+{
     return this->db->find_spatial_tree(this->get_id());
 }
 
-unique_spatial_tree
+namespace {
+    struct make_spatial_tree {
+        using ret_type = spatial_tree;
+        datatable const * const this_;
+        spatial_tree_idx const * const tree;
+        make_spatial_tree(datatable const * p, spatial_tree_idx const * t): this_(p), tree(t) {}
+        template<typename T> // T = scalartype_to_key
+        ret_type operator()(T) const {
+            return spatial_tree::make<typename T::type>(
+                this_->db, tree->pgroot,
+                this_->get_PrimaryKey(),
+                tree->idx); 
+        }
+    };
+}
+
+spatial_tree
 datatable::get_spatial_tree() const 
 {
     if (auto const tree = find_spatial_tree()) {
         if (m_primary_key) {
-            A_STATIC_ASSERT_TYPE(int64, spatial_tree::pk0_type);
-            constexpr scalartype::type spatial_scalartype = key_to_scalartype<spatial_tree::pk0_type>::value;
-            auto const & pk0 = m_primary_key;
-            if ((1 == pk0->size()) && (pk0->first_type() == spatial_scalartype)) {
-                return sdl::make_unique<spatial_tree>(this->db, tree.pgroot, pk0, tree.idx);
-            }
-            SDL_WARNING(!"not implemented");
+            return case_scalartype_to_key(m_primary_key->first_type(), make_spatial_tree(this, &tree));
         }
-        else {
-            SDL_ASSERT(0);
-        }
+        SDL_ASSERT(!"get_spatial_tree");
     }
     return {};
+}
+
+datatable::record_iterator
+datatable::scan_table_with_record_key(key_mem const & key) const
+{
+    SDL_ASSERT(!m_index_tree); // scan small table without index tree
+    if (shared_cluster_index const & index = get_cluster_index()) {
+        auto const last = _record.end();
+        for (auto it = _record.begin(); it != last; ++it) {
+            auto buf = make_vector((*it).get_cluster_key(*index));
+            mem_range_t const it_key = make_mem_range(buf);
+            SDL_ASSERT(mem_size(it_key) == mem_size(key));
+            if (!mem_compare(it_key, key)) {
+                return it;
+            }
+        }
+        return last;
+    }
+    else {
+        SDL_ASSERT(0);
+    }
+    return _record.end();
 }
 
 template<class ret_type, class fun_type>
 ret_type datatable::find_row_head_impl(key_mem const & key, fun_type const & fun) const
 {
     SDL_ASSERT(mem_size(key));
+    SDL_ASSERT(is_index_tree());
     if (m_index_tree) {
         if (auto const id = m_index_tree->find_page(key)) {
             if (page_head const * const h = db->load_page_head(id)) {
@@ -396,46 +477,70 @@ ret_type datatable::find_row_head_impl(key_mem const & key, fun_type const & fun
                     });
                     if (slot < data.size()) {
                         if (!tr->key_less(key, record_type(this, data[slot]).get_cluster_key(tr->index()))) {
-                            return fun(data[slot]
-#if SDL_DEBUG_RECORD_ID
-                                , recordID::init(id, slot)
-#endif
-                            );
+                            return fun(data[slot], recordID::init(id, slot)); //FIXME: skip recordID::init ?
                         }
                     }
-                    return ret_type{};
+                    return ret_type();
                 }
             }
             SDL_ASSERT(0);
         }
     }
-    return ret_type{};
+    return ret_type();
+}
+
+datatable::record_iterator
+datatable::find_record_iterator(key_mem const & key) const
+{
+    if (m_index_tree) {
+        if (auto const found = find_row_head_impl<recordID>(key,
+            [](row_head const *, recordID const & id) {
+                return id; }))
+        {
+            return _record.make_iterator(this, found);
+        }
+        SDL_ASSERT(!"find_record_iterator");
+        return _record.end();
+    }
+    return scan_table_with_record_key(key);
 }
 
 row_head const *
-datatable::find_row_head(key_mem const & key) const {
-    return find_row_head_impl<row_head const *>(key, [](row_head const * head
-#if SDL_DEBUG_RECORD_ID
-        , const recordID &
-#endif
-        ) {
-        return head;
-    });
+datatable::find_row_head(key_mem const & key) const
+{
+    if (m_index_tree) {
+        return find_row_head_impl<row_head const *>(key, [](row_head const * head, recordID const &) {
+            return head;
+        });
+    }
+    else {
+        const auto it = scan_table_with_record_key(key);
+        if (it != _record.end()) {
+            return (*it).head();
+        }
+        return nullptr;
+    }
 }
 
 datatable::record_type
-datatable::find_record(key_mem const & key) const {
-    return find_row_head_impl<record_type>(key, [this](row_head const * head
-#if SDL_DEBUG_RECORD_ID
-        , const recordID & id
-#endif
-        ) {
-        return record_type(this, head
-#if SDL_DEBUG_RECORD_ID
-            , id
-#endif
-            );
-    });
+datatable::find_record(key_mem const & key) const
+{
+    if (m_index_tree) {
+        return find_row_head_impl<record_type>(key, [this](row_head const * head, recordID const & id) {
+            return record_type(this, head
+    #if SDL_DEBUG_RECORD_ID
+                , id
+    #endif
+                );
+        });
+    }
+    else {
+        const auto it = scan_table_with_record_key(key);
+        if (it != _record.end()) {
+            return *it;
+        }
+        return {};
+    }
 }
 
 } // db

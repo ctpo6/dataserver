@@ -21,7 +21,7 @@ typedef quantity<unit::Meters, double> Meters;
 typedef quantity<unit::Degree, double> Degree;
 typedef quantity<unit::Radian, double> Radian;
 
-enum class spatial_type { // https://en.wikipedia.org/wiki/Well-known_text
+enum class spatial_type {
     null = 0,
     point,
     linestring,
@@ -30,6 +30,18 @@ enum class spatial_type { // https://en.wikipedia.org/wiki/Well-known_text
     multilinestring,    // numobj > 1
     multipolygon,       // numobj > 1, ring_num > 1, use ring_orient()
     //FIXME: multipoint,
+};
+
+// OGC compatible types
+enum class geometry_types : uint8 { // https://en.wikipedia.org/wiki/Well-known_text
+    Unknown = 0,
+    Point = 1,              // POINT
+    LineString = 2,         // LINESTRING
+    Polygon = 3,            // POLYGON
+    MultiPoint = 4,         // MULTIPOINT
+    MultiLineString = 5,    // MULTILINESTRING 
+    MultiPolygon = 6,       // MULTIPOLYGON 
+    GeometryCollection = 7, // GEOMETRYCOLLECTION
 };
 
 #pragma pack(push, 1) 
@@ -56,7 +68,7 @@ struct spatial_cell { // 5 bytes
         depth_3,
         depth_4,
     };
-    static const size_t size = depth_4; // max depth
+    static constexpr size_t size = depth_4; // max depth
     using id_type = uint8;
     union id_array { // 4 bytes
         id_type cell[size];
@@ -160,7 +172,7 @@ template<> struct spatial_grid_high<true> {
     };
     enum { HIGH_HIGH = HIGH * HIGH };
     spatial_grid_high(){}
-    static const size_t size = spatial_cell::size;
+    static constexpr size_t size = spatial_cell::size;
     int operator[](size_t i) const {
         SDL_ASSERT(i < size);
         return HIGH;
@@ -183,7 +195,7 @@ template<> struct spatial_grid_high<false> { // 4 bytes
         HIGH    = 16    // 16x16,   256 cells
     };
     enum { HIGH_HIGH = HIGH * HIGH };
-    static const size_t size = spatial_cell::size;
+    static constexpr size_t size = spatial_cell::size;
     grid_size level[size];
     
     spatial_grid_high() {
@@ -304,7 +316,7 @@ struct spatial_rect {
     double max_lat;
     double max_lon;
 
-    static const size_t size = 4;
+    static constexpr size_t size = 4;
     spatial_point operator[](size_t) const; // counter-clock wize
     spatial_point min() const;
     spatial_point max() const;
@@ -360,6 +372,12 @@ inline bool is_counterclockwise(winding t) { return winding::counterclockwise ==
 inline bool is_clockwise(winding t) { return winding::clockwise == t; }
 
 } // db
+
+template<> struct quantity_traits<db::Meters> {
+    enum { allow_increment = true };
+    enum { allow_decrement = true };
+};
+
 } // sdl
 
 #include "spatial_type.inl"

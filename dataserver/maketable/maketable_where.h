@@ -4,11 +4,11 @@
 #ifndef __SDL_SYSTEM_MAKETABLE_WHERE_H__
 #define __SDL_SYSTEM_MAKETABLE_WHERE_H__
 
-#if defined(SDL_OS_WIN32)
+#include "spatial/spatial_type.h"
+
+#if 0 //defined(SDL_OS_WIN32)
 #pragma warning(disable: 4503) //decorated name length exceeded, name was truncated
 #endif
-
-#include "spatial/spatial_type.h"
 
 namespace sdl { namespace db { namespace make {
 namespace where_ {
@@ -25,11 +25,20 @@ enum class condition {
     lambda,         // 8
     ORDER_BY,       // 9
     TOP,            // 10
-    STContains,     // 11
-    STIntersects,   // 12
-    STDistance,     // 13
+    ALL,            // 11 = SELECT *
+    STContains,     // 12
+    STIntersects,   // 13
+    STDistance,     // 14
+    STLength,       // 15
     _end
 };
+
+//TODO: SELECT DISTINCT
+//TODO: SELECT GROUP BY
+//TODO: SELECT INNER JOIN
+//TODO: SELECT COUNT
+//TODO: SELECT AS => tuple(columns)
+//TODO: Geography::UnionAggregate()
 
 template<condition T> 
 using condition_t = Val2Type<condition, T>;
@@ -45,9 +54,11 @@ inline const char * name(condition_t<condition::BETWEEN>)       { return "BETWEE
 inline const char * name(condition_t<condition::lambda>)        { return "lambda"; }
 inline const char * name(condition_t<condition::ORDER_BY>)      { return "ORDER_BY"; }
 inline const char * name(condition_t<condition::TOP>)           { return "TOP"; }
+inline const char * name(condition_t<condition::ALL>)           { return "ALL"; }
 inline const char * name(condition_t<condition::STContains>)    { return "STContains"; }
 inline const char * name(condition_t<condition::STIntersects>)  { return "STIntersects"; }
 inline const char * name(condition_t<condition::STDistance>)    { return "STDistance"; }
+inline const char * name(condition_t<condition::STLength>)      { return "STLength"; }
 
 template <condition value>
 inline const char * condition_name() {
@@ -55,14 +66,12 @@ inline const char * condition_name() {
 }
 
 template <condition c1, condition c2>
-struct is_condition
-{
+struct is_condition {
     enum { value = (c1 == c2) };
 };
 
 template <condition c1, condition c2>
-struct not_condition
-{
+struct not_condition {
     enum { value = (c1 != c2) };
 };
 
@@ -77,24 +86,27 @@ using is_condition_lambda = is_condition<condition::lambda, c>;
 
 template <condition c>
 struct is_condition_search {
-    enum { value = (c <= condition::lambda) ||
-        (c == condition::STContains) ||
-        (c == condition::STIntersects) ||
-        (c == condition::STDistance)
-    };
+    enum { value = (c != condition::TOP) && (c != condition::ORDER_BY) };
 };
 
 template <condition c>
 struct is_condition_spatial {
-    enum { value = (c == condition::STContains) ||
-        (c == condition::STIntersects) ||
-        (c == condition::STDistance)
+    enum { value = (c == condition::STContains)
+        || (c == condition::STIntersects)
+        || (c == condition::STDistance)
     };
 };
 
 template <condition c>
 struct is_condition_index {
-    enum { value = (c < condition::lambda) && (c != condition::NOT) };
+    enum { value = (c == condition::WHERE)
+        || (c == condition::IN)
+        || (c == condition::LESS)
+        || (c == condition::GREATER)
+        || (c == condition::LESS_EQ)
+        || (c == condition::GREATER_EQ)
+        || (c == condition::BETWEEN)
+    };
 };
 
 template <condition c>
@@ -402,16 +414,17 @@ struct SELECT_IF {
     using value_type = F;
     value_type value;
     using col = void;
-    SELECT_IF(value_type f) : value(f){}
+    template<class T>
+    SELECT_IF(T && f): value(std::forward<T>(f)) {}
     template<class record>
-    bool operator()(record p) {
+    bool operator()(record const & p) {
         return value(p);
     }
 };
 
 template<class fun_type> inline
-SELECT_IF<fun_type> IF(fun_type f) {
-    return SELECT_IF<fun_type>(f);
+SELECT_IF<fun_type> IF(fun_type && f) {
+    return SELECT_IF<fun_type>(std::forward<fun_type>(f));
 }
 
 template<class T, sortorder ord = sortorder::ASC> // T = col::
@@ -420,16 +433,6 @@ struct ORDER_BY {
     static constexpr condition cond = condition::ORDER_BY;
     using col = T;
     static constexpr sortorder value = ord;
-    enum { _order = (int)ord };  // workaround for error C2057: expected constant expression (VS 2015)
-#if 0 //defined(SDL_OS_WIN32) && (_MSC_VER == 1800) // VS 2013
-    // workaround for fatal error C1001: An internal error has occurred in the compiler
-    //(compiler file 'f:\dd\vctools\compiler\utc\src\p2\ehexcept.c', line 956)
-    ORDER_BY(std::initializer_list<int> tmp) {
-        SDL_ASSERT(!tmp.size());
-    }
-#else
-    ORDER_BY() = default; // require: && ORDER_BY (VS 2013)
-#endif
 };
 
 struct TOP {
@@ -438,6 +441,12 @@ struct TOP {
     using value_type = size_t;
     value_type value;
     TOP(value_type v) : value(v){}
+};
+
+struct ALL {
+    static constexpr condition cond = condition::ALL;
+    static constexpr bool value = true;
+    using col = void;
 };
 
 //-------------------------------------------------------------------
@@ -464,7 +473,7 @@ using compare_t = Val2Type<compare, T>;
 
 template<class T, INDEX _h = INDEX::AUTO> // T = col::
 struct STContains {
-    static_assert(T::type == scalartype::t_geography, "");
+    static_assert(T::type == scalartype::t_geography, "STContains need geography");
     static constexpr condition cond = condition::STContains;
     static constexpr INDEX hint = _h;
     using col = T;
@@ -476,10 +485,10 @@ struct STContains {
         : value(spatial_point::init(std::forward<Args>(args)...)){}
 };
 
-template<class T, intersect _inter = intersect::_default, INDEX _h = INDEX::AUTO> // T = col::
+template<class T, INDEX _h = INDEX::AUTO> // T = col::
 struct STIntersects {
-    static_assert(T::type == scalartype::t_geography, "");
-    static constexpr intersect inter = _inter;
+    static_assert(T::type == scalartype::t_geography, "STIntersects need geography");
+    static constexpr intersect inter = intersect::_default;
     static constexpr condition cond = condition::STIntersects;
     static constexpr INDEX hint = _h;
     using col = T;
@@ -491,11 +500,11 @@ struct STIntersects {
         : value(spatial_rect::init(std::forward<Args>(args)...)){}
 };
 
-template<class T, compare _comp, intersect _inter = intersect::_default, INDEX _h = INDEX::AUTO> // T = col::
+template<class T, compare _comp, INDEX _h = INDEX::AUTO> // T = col::
 struct STDistance {
-    static_assert(T::type == scalartype::t_geography, "");
+    static_assert(T::type == scalartype::t_geography, "STDistance need geography");
     static constexpr compare comp = _comp;
-    static constexpr intersect inter = _inter;
+    static constexpr intersect inter = intersect::_default;
     static constexpr condition cond = condition::STDistance;
     static constexpr INDEX hint = _h;
     using col = T;
@@ -507,6 +516,19 @@ struct STDistance {
     STDistance(Latitude const lat, Longitude const lon, Meters v2)
         : value(spatial_point::init(lat, lon), v2) {
         SDL_ASSERT(v2.value() >= 0);    
+    }
+};
+
+template<class T, compare _comp> // T = col::
+struct STLength {
+    static_assert(T::type == scalartype::t_geography, "STLength need geography");
+    static constexpr compare comp = _comp;
+    static constexpr condition cond = condition::STLength;
+    using col = T;
+    using value_type = search_value<cond, Meters, dim::_1>;
+    value_type value;
+    STLength(Meters v): value(v) {
+        SDL_ASSERT(v.value() >= 0);    
     }
 };
 
@@ -741,8 +763,10 @@ struct trace_SEARCH {
 
     template<condition _c, class T, INDEX _h> // T = col::
     bool operator()(identity<SEARCH<_c, T, T::is_array, _h>>) {
-        const char * const col_name = T::name();
-        const char * const val_name = typeid(typename T::val_type).name();
+        static const char * const col_name = T::name();
+        static const char * const val_name = typeid(typename T::val_type).name();
+        (void)col_name;
+        (void)val_name;
         SDL_TRACE(count++, ":", condition_name<_c>(), "<", col_name, ">", " (", val_name, ")", " INDEX::", index_name<_h>());
         return true;
     }
@@ -866,6 +890,12 @@ public:
         A_STATIC_ASSERT_TYPE(size_t, value_t);
     }
 };
+
+template<> struct sub_expr_value<where_::ALL> {
+    static constexpr condition cond = where_::ALL::cond;
+    static constexpr bool value = true;
+    sub_expr_value(where_::ALL &&) {}
+};  
 
 //------------------------------------------------------------------
 

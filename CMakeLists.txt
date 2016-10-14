@@ -18,8 +18,7 @@ endif()
 
 # Default build is in Release mode
 if(NOT CMAKE_BUILD_TYPE AND NOT MSVC)
-  #set(CMAKE_BUILD_TYPE "Release")
-  set(CMAKE_BUILD_TYPE "Debug")
+  set(CMAKE_BUILD_TYPE "Release")
 endif(NOT CMAKE_BUILD_TYPE AND NOT MSVC)
 
 if(WIN32)
@@ -34,9 +33,6 @@ add_definitions(-DSDL_VERSION_MAJOR=${SDL_VERSION_MAJOR})
 add_definitions(-DSDL_VERSION_MINOR=${SDL_VERSION_MINOR})
 add_definitions(-DSDL_VERSION_REVISION=${SDL_VERSION_REVISION})
 add_definitions(-DSDL_VERSION=${SDL_VERSION})
-
-# explicitly enable code which is not thread-safe
-# add_definitions(-DSDL_THREAD_UNSAFE=)
 
 configure_file( dataserver/system/version.h.in ${PROJECT_SOURCE_DIR}/dataserver/system/version.h )
  
@@ -73,7 +69,10 @@ set( SDL_HEADER_COMMON
   dataserver/common/compact_set.h
   dataserver/common/outstream.h
   dataserver/common/locale.h
-  dataserver/common/test_ci.h )
+  dataserver/common/time_util.h
+  dataserver/common/algorithm.h
+  dataserver/common/test_ci.h
+)
 
 set( SDL_SOURCE_COMMON
   dataserver/common/static.cpp
@@ -128,6 +127,7 @@ set( SDL_HEADER_SPATIAL
   dataserver/spatial/spatial_type.inl
   dataserver/spatial/hilbert.inl
   dataserver/spatial/spatial_index.h
+  dataserver/spatial/spatial_tree.h
   dataserver/spatial/spatial_tree_t.h
   dataserver/spatial/spatial_tree_t.hpp
   dataserver/spatial/interval_cell.h
@@ -182,7 +182,8 @@ set( SDL_HEADER_SYSTEM
   dataserver/system/index_tree_t.inl
   dataserver/system/index_tree_t.hpp
   dataserver/system/primary_key.h
-  dataserver/system/usertable.h )
+  dataserver/system/usertable.h
+  dataserver/system/gregorian.hpp )
 
 set( SDL_SOURCE_SYSOBJ
   dataserver/sysobj/boot_page.cpp

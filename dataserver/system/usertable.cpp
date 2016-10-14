@@ -6,7 +6,7 @@
 
 namespace sdl { namespace db {
 
-usertable::column::column(syscolpars_row const * p, sysscalartypes_row const * s)
+usertable::column::column(syscolpars_row const * const p, sysscalartypes_row const * const s)
     : colpar(p)
     , scalar(s)
     , name(col_name_t(p))
@@ -21,7 +21,7 @@ usertable::column::column(syscolpars_row const * p, sysscalartypes_row const * s
 
 //----------------------------------------------------------------------------
 
-usertable::usertable(sysschobjs_row const * p, columns && c, primary_key const * PK)
+usertable::usertable(sysschobjs_row const * const p, columns && c, primary_key const * const PK)
     : schobj(p)
     , m_name(col_name_t(p))
     , m_schema(std::move(c))
@@ -191,9 +191,9 @@ std::string usertable::type_schema(primary_key const * const PK) const
     usertable const & ut = *this;
     std::stringstream ss;
     ss  << "name = " << ut.m_name
-        << "\nid = " << ut.get_id()._32
+        << "\nid = " << ut.get_id()
         << std::uppercase << std::hex 
-        << " (" << ut.get_id()._32 << ")"
+        << " (" << ut.get_id() << ")"
         << std::dec
         << "\nColumns(" << ut.m_schema.size() << ")"
         << "\n";

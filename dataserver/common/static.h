@@ -311,6 +311,7 @@ public:
     explicit sdl_exception(const char* s): base_type(s){
         SDL_ASSERT(s);
     }
+    explicit sdl_exception(const std::string & s): base_type(s){}
 };
 
 template<class T>
@@ -332,6 +333,15 @@ void throw_error_if(const bool condition, Ts&&... params) {
     static_assert(std::is_base_of<sdl_exception, T>::value, "is_base_of");
     if (condition) {
         SDL_ASSERT(!"throw_error_if");
+        throw T(std::forward<Ts>(params)...);
+    }
+}
+
+template<typename T, typename... Ts> inline
+void throw_error_if_not(const bool condition, Ts&&... params) {
+    static_assert(std::is_base_of<sdl_exception, T>::value, "is_base_of");
+    if (!condition) {
+        SDL_ASSERT_DEBUG_2(!"throw_error_if_not");
         throw T(std::forward<Ts>(params)...);
     }
 }
@@ -390,6 +400,10 @@ inline constexpr bc make_break_or_continue(bool const t) {
     return static_cast<break_or_continue>(t);
 }
 template<class T> bc make_break_or_continue(T) = delete;
+
+template<class T> inline bool is_break(T t) {
+    return make_break_or_continue(t) == bc::break_;
+}
 
 } // sdl
 

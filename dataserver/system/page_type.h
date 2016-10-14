@@ -29,8 +29,8 @@ struct pageType // 1 byte
         PFS = 11,           //11 - PFS page. Holds allocation and free space information about pages within a PFS interval (every data file is also split into approx 64MB chunks – the number of pages that can be represented in a byte-map on a single database page. PFS = Page Free Space. The first one is page 1 in each file. More on these in a later post.
         _12 = 12,           //12 - reserved
         boot = 13,          //13 - boot page. Holds information about the database. There’s only one of these in the database. It’s page 9 in file 1.
-        _14 = 14,           //14 - reserved
-        fileheader = 15,    //15 - file header page.Holds information about the file.There’s one per file and it’s page 0 in the file.
+        _14 = 14,           //14 - reserved. Instance Header - present only in the master database at 1:10. Stores the various settings you see when getting properties on an SQL server instance.
+        fileheader = 15,    //15 - file header page. Holds information about the file. There’s one per file and it’s page 0 in the file.
         diffmap = 16,       //16 - diff map page. Holds information about which extents in a GAM interval have changed since the last full or differential backup. The first one is page 6 in each file.
         MLmap = 17,         //17 - ML map page.Holds information about which extents in a GAM interval have changed while in bulk - logged mode since the last backup.This is what allows you to switch to bulk - logged mode for bulk - loads and index rebuilds without worrying about breaking a backup chain.The first one is page 7 in each file.
         deallocated = 18,   //18 - a page that’s be deallocated by DBCC CHECKDB during a repair operation.
@@ -344,11 +344,17 @@ inline bool operator < (guid_t const & x, guid_t const & y) {
     return guid_t::compare(x, y) < 0;
 }
 
-struct numeric9 // 8 bytes
-{
+template<int size>
+struct numeric_t {
+    static_assert((size == 5) || (size == 9) || (size == 13) || (size == 17), "");
+    using type = char[size]; 
+    type data;
+};
+template<> struct numeric_t<9> {
     uint8 _8;
     int64 _64;
 };
+using numeric9 = numeric_t<9>;
 
 struct decimal5 // 5 bytes
 {
@@ -436,6 +442,21 @@ struct smalldatetime_t // 4 bytes
     uint16 day;
 };
 
+struct gregorian_t
+{
+    int year;
+    int month;
+    int day;
+};
+
+struct clocktime_t
+{
+    int hour;  // hours since midnight - [0, 23]
+    int min;   // minutes after the hour - [0, 59]
+    int sec;   // seconds after the minute - [0, 60] including leap second
+    int milliseconds; // < 1 second
+};
+
 /*
 Datetime Data Type
 
@@ -454,24 +475,35 @@ the will actually be rounded to the nearest 0, 3, 7, or 10 millisecond boundary 
 */
 struct datetime_t // 8 bytes
 {
-    uint32 t;   // clock ticks since midnight (where each tick is 1/300th of a second)
-    int32 d;    // days since 1900-01-01
+    uint32 ticks;   // clock ticks since midnight (where each tick is 1/300th of a second)
+    int32 days;     // days since 1900-01-01
 
-    enum { u_date_diff = 25567 }; // = SELECT DATEDIFF(d, '19000101', '19700101');
+    static constexpr int32 u_date_diff = 25567; // = SELECT DATEDIFF(d, '19000101', '19700101');
 
     // convert to number of seconds that have elapsed since 00:00:00 UTC, 1 January 1970
-    static size_t get_unix_time(datetime_t const & src);
-    size_t get_unix_time() const {
-        return get_unix_time(*this);
-    }
+    size_t get_unix_time() const;
     static datetime_t set_unix_time(size_t);
 
     bool is_null() const {
-        return !d && !t;
+        return !days && !ticks;
     }
-    bool is_valid() const {
-        return d >= u_date_diff;
+    bool unix_epoch() const {
+        return days >= u_date_diff;
     }
+    bool before_epoch() const {
+        return !unix_epoch();
+    }
+    static datetime_t init(int32 days, uint32 ticks) {
+        datetime_t d;
+        d.ticks = ticks;
+        d.days = days;
+        return d;
+    }
+    int milliseconds() const {
+        return (ticks % 300) * 1000 / 300; // < 1 second
+    }
+    gregorian_t gregorian() const;
+    clocktime_t clocktime() const;
 };
 
 struct auid_t // 8 bytes
@@ -499,6 +531,16 @@ struct schobj_id // 4 bytes - the unique ID for the object (sysschobjs_row)
 };
 
 inline schobj_id _schobj_id(schobj_id::type i) {
+    return { i };
+}
+
+struct nsid_id // 4 bytes - the schema ID of this object (sysschobjs_row)
+{
+    using type = int32;
+    type _32;
+};
+
+inline nsid_id _nsid_id(nsid_id::type i) {
     return { i };
 }
 
@@ -679,6 +721,13 @@ inline bool mem_empty(mem_range_t const & m) {
     return 0 == mem_size(m);
 }
 
+inline int mem_compare(mem_range_t const & x, mem_range_t const & y) {
+    if (const int i = static_cast<int>(mem_size(x) - mem_size(y))) {
+        return i;
+    }
+    return ::memcmp(x.first, y.first, mem_size(x)); 
+}
+
 inline bool mem_empty(vector_mem_range_t const & array) {
     for (auto const & m : array) {
         if (!mem_empty(m)) return false;
@@ -698,6 +747,11 @@ inline size_t mem_size_n(vector_mem_range_t const & data) {
 
 inline size_t mem_size(vector_mem_range_t const & m) {
     return mem_size_n(m);
+}
+
+inline mem_range_t make_mem_range(std::vector<char> & buf) { // lvalue to avoid expiring buf
+    auto const p = buf.data();
+    return { p, p + buf.size() };
 }
 
 std::vector<char> make_vector(vector_mem_range_t const &); // note performance!
@@ -799,6 +853,14 @@ public:
     }
 };
 
+template<scalartype::type T>
+class var_mem_t : public var_mem { // movable
+public:
+    static_assert(T != scalartype::t_none, "");
+    static constexpr scalartype::type unit_type = T;
+    using var_mem::var_mem;
+};
+
 //-----------------------------------------------------------------
 
 template<class T>
@@ -824,11 +886,11 @@ struct enum_iter : is_static
         t = static_cast<T>(int(t) + 1);
         return t;
     }
-    static int distance(T first, T last) {
+    static int distance(T const first, T const last) {
         return int(last) - int(first);
     }
     template<class fun_type> static 
-    void for_each(fun_type const & fun) {
+    void for_each(fun_type && fun) {
         for (auto t = T::_begin; t != T::_end; ++t) {
             if (!enum_trait<T>::reserved(t)) {
                 fun(t);
@@ -848,8 +910,8 @@ inline int distance(pageType::type first, pageType::type last) {
 }
 
 template<class fun_type> inline
-void for_pageType(fun_type const & fun) {
-    enum_iter<pageType::type>::for_each(fun);
+void for_pageType(fun_type && fun) {
+    enum_iter<pageType::type>::for_each(std::forward<fun_type>(fun));
 }
 
 //-----------------------------------------------------------------
@@ -880,6 +942,11 @@ inline int distance(scalartype::type first, scalartype::type last) {
 template<class fun_type> inline
 void for_scalartype(fun_type fun) {
     enum_iter<scalartype::type>::for_each(fun);
+}
+
+inline std::ostream & operator <<(std::ostream & out, schobj_id id) {
+    out << id._32;
+    return out;
 }
 
 } // db

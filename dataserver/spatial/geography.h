@@ -24,6 +24,13 @@ public:
         {
             SDL_ASSERT(m_begin && m_end && size());
         }
+        point_access(geo_pointarray const * const p,
+                     geo_tail const * const tail)
+            : m_begin(tail->begin<0>(*p))
+            , m_end(tail->end<0>(*p))
+        {
+            SDL_ASSERT(m_begin && m_end && size());
+        }
         spatial_point const * begin() const {
             return m_begin;
         }
@@ -62,10 +69,12 @@ public:
     size_t size() const {
         return mem_size(m_data);
     }
+    geometry_types STGeometryType() const;
     std::string STAsText() const;
     bool STContains(spatial_point const &) const;
     bool STIntersects(spatial_rect const &) const;
     Meters STDistance(spatial_point const &) const;
+    Meters STLength() const;
 private:
     template<class T> T const * cast_t() const && = delete;
     template<class T> T const * cast_t() const & {        
@@ -98,6 +107,8 @@ public:
     size_t numobj() const; // if multipolygon or multilinestring then numobj > 1 else numobj = 0 
     point_access get_subobj(size_t subobj) const && = delete;
     point_access get_subobj(size_t subobj) const &;
+    point_access get_exterior() const && = delete;
+    point_access get_exterior() const &;
 
     using vec_orientation = vector_buf<orientation, 16>;
     using vec_winding = vector_buf<winding, 16>;
@@ -130,6 +141,12 @@ inline geo_mem::point_access
 geo_mem::get_subobj(size_t const subobj) const & {
     SDL_ASSERT(subobj < numobj());
     return point_access(cast_pointarray(), get_tail(), subobj);
+}
+
+inline geo_mem::point_access
+geo_mem::get_exterior() const & { // get_subobj(0)
+    SDL_ASSERT(numobj());
+    return point_access(cast_pointarray(), get_tail());
 }
 
 } // db

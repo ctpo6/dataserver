@@ -31,6 +31,19 @@ inline pair_break_or_continue_bool make_break_or_continue_bool(pair_break_or_con
     return b;
 }
 
+namespace make_query_impl_ {
+struct is_static_record_count_ {
+private:
+    template<typename T> static auto check(T const *) -> decltype(T::static_record_count);
+    template<typename T> static void check(...);
+public:
+    template<typename T> 
+    static auto test() -> decltype(check<T>(nullptr));
+};
+template<typename T> 
+using is_static_record_count = identity<decltype(is_static_record_count_::test<T>())>;
+} // make_query_impl_
+
 template<class this_table, class _record>
 class make_query: noncopyable {
     using table_clustered = typename this_table::clustered;
@@ -49,14 +62,15 @@ public:
     using pk0_type = T0_type;
 private:
     this_table const & m_table;
-    page_head const * const m_cluster;
+    shared_cluster_index const m_cluster_index;
 public:
     make_query(this_table const * p, database const * const d)
         : m_table(*p)
-        , m_cluster(d->get_cluster_root(_schobj_id(this_table::id)))
+        , m_cluster_index(d->get_cluster_index(_schobj_id(this_table::id)))
     {
         SDL_ASSERT(meta::test_clustered<table_clustered>());
-        SDL_ASSERT((index_size != 0) == (m_cluster != nullptr));
+        SDL_ASSERT((index_size != 0) == !!m_cluster_index);
+        A_STATIC_CHECK_TYPE(schobj_id::type const, this_table::id);
     }
     template<class fun_type>
     void scan_if(fun_type && fun) const {
@@ -90,8 +104,19 @@ public:
         A_STATIC_ASSERT_NOT_TYPE(NullType, T0_type);
         return m_table.get_table().get_spatial_tree(identity<T0_type>());
     }
+private:
+    size_t record_count(identity<void>) const { 
+        return m_table.get_table()._record.count(); // can be slow
+    }
+    static constexpr size_t record_count(identity<size_t>) { 
+        return this_table::static_record_count;
+    }
+public:
     size_t record_count() const {
-        return m_table.get_table()._record.count();
+        return record_count(make_query_impl_::is_static_record_count<this_table>());
+    }
+    static constexpr size_t static_record_count() {
+        return this_table::static_record_count;
     }
 public:
     class seek_table; friend seek_table;
@@ -130,6 +155,11 @@ public:
         key_type dest; // uninitialized
         make_query::read_key(dest, src);
         return dest;
+    }
+    static bool equal_key(record const & src, key_type const & key) {
+        key_type dest; // uninitialized
+        make_query::read_key(dest, src);
+        return dest == key;
     }
     key_type read_key(row_head const * h) const {
         SDL_ASSERT(h);

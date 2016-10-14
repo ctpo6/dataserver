@@ -26,6 +26,7 @@
 #include "static.h"
 #include "format.h"
 #include "quantity.h"
+#include "algorithm.h"
 
 #include "test_ci.h"
 

@@ -3,6 +3,7 @@
 #include "common/common.h"
 #include "page_type.h"
 #include "common/time_util.h"
+#include "gregorian.hpp"
 #include <cstddef>
 #include <cstring>      // for memcmp
 #include <algorithm>
@@ -173,14 +174,49 @@ const idxtype_name INDEXTYPE_NAME[] = {
 } // namespace
 
 // convert to number of seconds that have elapsed since 00:00:00 UTC, 1 January 1970
-size_t datetime_t::get_unix_time(datetime_t const & src)
+size_t datetime_t::get_unix_time() const
 {
-    SDL_ASSERT(!src.is_null());
-    SDL_ASSERT(src.is_valid());
-
-    size_t result = (size_t(src.d) - u_date_diff) * day_to_sec<1>::value;
-    result += size_t(src.t) / 300;
+    SDL_ASSERT(unix_epoch());
+    size_t result = (static_cast<size_t>(this->days) - static_cast<size_t>(u_date_diff)) * day_to_sec<1>::value;
+    result += static_cast<size_t>(this->ticks) / 300;
     return result;
+}
+
+gregorian_t datetime_t::gregorian() const
+{
+    if (is_null()) {
+        return {};
+    }
+    using namespace gregorian_;
+    using ymd_type = gregorian_calendar::ymd_type;
+    const auto day_number = gregorian_calendar::day_number(ymd_type(1900, 1, 1)) + this->days;
+    const auto ymd = gregorian_calendar::from_day_number(day_number);
+    gregorian_t result; //uninitialized
+    result.year = ymd.year;
+    result.month = ymd.month;
+    result.day = ymd.day;
+    return result;
+}
+
+clocktime_t datetime_t::clocktime() const
+{
+    if (is_null()) {
+        return {};
+    }
+    datetime_t src;
+    src.ticks = this->ticks;
+    src.days = datetime_t::u_date_diff;
+    struct tm src_tm;
+    if (time_util::safe_gmtime(src_tm, static_cast<time_t>(src.get_unix_time()))) {
+        clocktime_t result; //uninitialized
+        result.hour = src_tm.tm_hour;
+        result.min = src_tm.tm_min;
+        result.sec = src_tm.tm_sec;
+        result.milliseconds = src.milliseconds();
+        return result;
+    }
+    SDL_ASSERT(0);
+    return {};
 }
 
 const char * obj_code::get_name(type const t)
@@ -192,7 +228,7 @@ const char * obj_code::get_name(type const t)
 
 const char * obj_code::get_name(obj_code const d)
 {
-    type t = obj_code_type(d); // linear search
+    const type t = obj_code_type(d); // linear search
     if (t != type::_end) {
         return obj_code::get_name(t);
     }
@@ -224,11 +260,11 @@ datetime_t datetime_t::set_unix_time(size_t const val)
     time_t temp = static_cast<time_t>(val);
     struct tm tt;
     if (time_util::safe_gmtime(tt, temp)) {
-        result.d = u_date_diff + int32(val / day_to_sec<1>::value);
-        result.t = tt.tm_sec;
-        result.t += tt.tm_min * min_to_sec<1>::value;
-        result.t += tt.tm_hour * hour_to_sec<1>::value;
-        result.t *= 300;
+        result.days = u_date_diff + int32(val / day_to_sec<1>::value);
+        result.ticks = tt.tm_sec;
+        result.ticks += tt.tm_min * min_to_sec<1>::value;
+        result.ticks += tt.tm_hour * hour_to_sec<1>::value;
+        result.ticks *= 300;
     }
     return result;
 }
@@ -346,7 +382,6 @@ namespace sdl {
                 unit_test()
                 {
                     SDL_TRACE_FILE;
-
                     SDL_ASSERT(IS_LITTLE_ENDIAN);
                     static_assert(sizeof(uint8) == 1, "");
                     static_assert(sizeof(int16) == 2, "");
@@ -356,13 +391,13 @@ namespace sdl {
                     static_assert(sizeof(int64) == 8, "");
                     static_assert(sizeof(uint64) == 8, "");
                     static_assert(sizeof(nchar_t) == 2, "");
-#if defined(SDL_OS_WIN32) && (_MSC_VER == 1800) // VS 2013
-#else
                     static_assert(is_power_two(2), "");
-#endif
+
                     A_STATIC_ASSERT_IS_POD(guid_t);
                     A_STATIC_ASSERT_IS_POD(nchar_t);
                     A_STATIC_ASSERT_IS_POD(datetime_t);
+                    A_STATIC_ASSERT_IS_POD(gregorian_t);
+                    A_STATIC_ASSERT_IS_POD(clocktime_t);
 
                     static_assert(sizeof(pageType) == 1, "");
                     static_assert(sizeof(pageFileID) == 6, "");
@@ -372,7 +407,8 @@ namespace sdl {
                     static_assert(sizeof(guid_t) == 16, "");
                     static_assert(sizeof(nchar_t) == 2, "");
                     static_assert(sizeof(datetime_t) == 8, "");
-                    static_assert(sizeof(bitmask8) == 1, "");
+                    static_assert(sizeof(bitmask8) == 1, "");   
+                    static_assert(sizeof(var_mem_t<scalartype::t_varchar>) == sizeof(var_mem), "var_mem_t");
 
                     A_STATIC_ASSERT_IS_POD(auid_t);
                     static_assert(offsetof(auid_t, d.id) == 0x02, "");
@@ -401,6 +437,7 @@ namespace sdl {
                     }
                     A_STATIC_ASSERT_IS_POD(obj_code);
                     A_STATIC_ASSERT_IS_POD(schobj_id);
+                    A_STATIC_ASSERT_IS_POD(nsid_id);
                     A_STATIC_ASSERT_IS_POD(index_id);
                     A_STATIC_ASSERT_IS_POD(scalarlen);
                     A_STATIC_ASSERT_IS_POD(scalartype);
@@ -411,12 +448,14 @@ namespace sdl {
                     A_STATIC_ASSERT_IS_POD(column_id);
                     A_STATIC_ASSERT_IS_POD(iscolstatus);
                     A_STATIC_ASSERT_IS_POD(numeric9);
+                    A_STATIC_ASSERT_IS_POD(numeric_t<5>);
                     A_STATIC_ASSERT_IS_POD(decimal5);
                     A_STATIC_ASSERT_IS_POD(pair_key<char>);
                     static_assert(sizeof(pair_key<char>) == 2, "");
 
                     static_assert(sizeof(obj_code) == 2, "");
                     static_assert(sizeof(schobj_id) == 4, "");
+                    static_assert(sizeof(nsid_id) == 4, "");
                     static_assert(sizeof(index_id) == 4, "");
                     static_assert(sizeof(scalarlen) == 2, "");
                     static_assert(sizeof(scalartype) == 4, "");
@@ -427,6 +466,7 @@ namespace sdl {
                     static_assert(sizeof(column_id) == 4, "");
                     static_assert(sizeof(iscolstatus) == 4, "");
                     static_assert(sizeof(numeric9) == 9, "");
+                    static_assert(sizeof(numeric_t<5>) == 5, "");
                     static_assert(sizeof(decimal5) == 5, "");
 
                     A_STATIC_ASSERT_IS_POD(pfs_byte);

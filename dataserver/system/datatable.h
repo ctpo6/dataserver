@@ -6,7 +6,7 @@
 
 #include "sysobj/iam_page.h"
 #include "index_tree.h"
-#include "spatial/spatial_tree_t.h"
+#include "spatial/spatial_tree.h"
 #include "spatial/geography.h"
 
 #if (SDL_DEBUG > 1) && defined(SDL_OS_WIN32)
@@ -16,21 +16,6 @@
 namespace sdl { namespace db {
 
 class database;
-
-using spatial_tree = spatial_tree_t<int64>;
-using shared_spatial_tree = std::shared_ptr<spatial_tree>;
-using unique_spatial_tree = std::unique_ptr<spatial_tree>;
-
-template<typename pk0_type> using shared_spatial_tree_t = std::shared_ptr<spatial_tree_t<pk0_type> >;
-template<typename pk0_type> using unique_spatial_tree_t = std::unique_ptr<spatial_tree_t<pk0_type> >;
-
-struct spatial_tree_idx {
-    page_head const * pgroot = nullptr;
-    sysidxstats_row const * idx = nullptr;
-    explicit operator bool() const {
-        return pgroot && idx;
-    }
-};
 
 class base_datatable {
 protected:
@@ -88,6 +73,7 @@ public:
         iterator end() const {
             return iterator(this);
         }
+        iterator make_iterator(datatable const *, pageFileID const &) const;
     private:
         friend iterator;
         static page_head const * dereference(page_pos const & p) {
@@ -112,6 +98,7 @@ public:
         iterator end() const {
             return page_access->end();
         }
+        iterator make_iterator(datatable const *, pageFileID const &) const;
     };
 //------------------------------------------------------------------
     class datarow_access {
@@ -126,6 +113,7 @@ public:
         }
         iterator begin() const;
         iterator end() const;
+        iterator make_iterator(datatable const *, recordID const &) const;
     public:
         static recordID get_id(iterator const &);
         static page_head const * get_page(iterator const &);
@@ -174,9 +162,6 @@ public:
         col_size_t size() const; // # of columns
         column const & usercol(col_size_t) const;
         std::string type_col(col_size_t) const;
-        std::string STAsText(col_size_t) const;
-        bool STContains(col_size_t, spatial_point const &) const;
-        Meters STDistance(col_size_t, spatial_point const &) const;
         bool is_geography(col_size_t) const;
         spatial_type geo_type(col_size_t) const;
         geo_mem geography(col_size_t) const;
@@ -184,6 +169,9 @@ public:
         vector_mem_range_t get_cluster_key(cluster_index const &) const;        
         template<scalartype::type type>
         scalartype_t<type> const * cast_fixed_col(col_size_t) const;
+        std::string STAsText(col_size_t) const;
+        bool STContains(col_size_t, spatial_point const &) const;   // can use geography().STContains()
+        Meters STDistance(col_size_t, spatial_point const &) const; // can use geography().STDistance()
     public:
         size_t fixed_size() const;
         size_t var_size() const;
@@ -210,6 +198,7 @@ public:
         explicit head_access(base_datatable const *);
         iterator begin() const;
         iterator end() const;
+        iterator make_iterator(datatable const *, recordID const &) const;
     private:
         friend iterator;
         friend record_access;
@@ -238,7 +227,10 @@ public:
             return iterator(this, _head.end());
         }
         size_t count() const { // checks for forwarded and ghosted records
-            return std::distance(begin(), end());
+            return std::distance(begin(), end()); // can be slow
+        }
+        iterator make_iterator(datatable const * p, recordID const & rec) const {
+            return iterator(this, _head.make_iterator(p, rec));
         }
     private:
         friend iterator;
@@ -256,7 +248,6 @@ public:
         }
     };
 public:
-    //using unique_record = std::unique_ptr<record_type>;
     using datarow_iterator = datarow_access::iterator;
     using record_iterator = record_access::iterator;
     using head_iterator = head_access::iterator;
@@ -272,40 +263,56 @@ public:
 
     shared_primary_key const & get_PrimaryKey() const;
     column_order get_PrimaryKeyOrder() const;
+    usertable::col_index get_PrimaryKeyCol() const;
 
     shared_cluster_index const & get_cluster_index() const;  
     shared_index_tree const & get_index_tree() const;
-    unique_spatial_tree get_spatial_tree() const;
+    spatial_tree get_spatial_tree() const;
 
     template<typename pk0_type> unique_spatial_tree_t<pk0_type>
     get_spatial_tree(identity<pk0_type>) const;
 
-    record_type find_record(key_mem const &) const;
+    bool is_index_tree() const {
+        return !!m_index_tree;
+    }
     row_head const * find_row_head(key_mem const &) const;
 
+    record_type find_record(key_mem const & key) const;
+    record_type find_record(vector_mem_range_t const & key) const; 
+
+    record_iterator find_record_iterator(key_mem const & key) const;
+    record_iterator find_record_iterator(vector_mem_range_t const & key) const;
+
+    template<typename T>
+    record_iterator find(T const & key) const {
+        return find_record_iterator(key);
+    }
     template<class T> 
     record_type find_record_t(T const & key) const {
         const char * const p = reinterpret_cast<const char *>(&key);
-        return find_record({p, p + sizeof(T)});
+        return find_record(key_mem(p, p + sizeof(T)));
     }
     template<class T> 
     row_head const * find_row_head_t(T const & key) const {
         const char * const p = reinterpret_cast<const char *>(&key);
-        return find_row_head({p, p + sizeof(T)});
+        return find_row_head(key_mem(p, p + sizeof(T)));
+    }
+    template<class T> 
+    record_iterator find_record_iterator_t(T const & key) const {
+        const char * const p = reinterpret_cast<const char *>(&key);
+        return find_record_iterator(key_mem(p, p + sizeof(T)));
+    }
+    template<typename T>
+    record_iterator find_t(T const & key) const {
+        return find_record_iterator_t(key);
     }
     template<class T, class fun_type> static
-    void for_datarow(T && data, fun_type fun) {
-        A_STATIC_ASSERT_TYPE(datarow_access, remove_reference_t<T>);
-        for (row_head const * row : data) {
-            if (row) { 
-                fun(*row);
-            }
-        }
-    }
+    void for_datarow(T && data, fun_type && fun);
 private:
     template<class ret_type, class fun_type>
     ret_type find_row_head_impl(key_mem const &, fun_type const &) const;
     spatial_tree_idx find_spatial_tree() const;
+    record_iterator scan_table_with_record_key(key_mem const &) const;
 private:
     shared_primary_key m_primary_key;
     shared_cluster_index m_cluster_index;

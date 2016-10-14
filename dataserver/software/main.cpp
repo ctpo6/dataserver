@@ -76,6 +76,7 @@ struct cmd_option : noncopyable {
     std::string exclude;
     db::make::export_database::param_type export_;
     int precision = 0;
+    bool record_count = false;
 };
 
 
@@ -776,12 +777,13 @@ struct find_index_key_t: noncopyable
     void unexpected(db::scalartype::type) {}
 };
 
-struct wrap_find_index_key_t
+struct wrap_find_index_key_t : noncopyable
 {
+    using ret_type = void; // optional
     find_index_key_t & fun;
     wrap_find_index_key_t(find_index_key_t & f) : fun(f){}
-    template<class T> void operator()(T t) { fun(t); }
-    void unexpected(db::scalartype::type) {}
+    template<class T> ret_type operator()(T t) { fun(t); }
+    ret_type unexpected(db::scalartype::type) {}
 };
 
 template<class T>
@@ -827,7 +829,7 @@ struct parse_index_key: noncopyable
     void unexpected(db::scalartype::type) {}
 };
 
-struct wrap_parse_index_key
+struct wrap_parse_index_key : noncopyable
 {
     parse_index_key & fun;
     wrap_parse_index_key(parse_index_key & f): fun(f){}
@@ -835,7 +837,7 @@ struct wrap_parse_index_key
     void unexpected(db::scalartype::type) {}
 };
 
-struct find_composite_key_t: noncopyable
+struct find_composite_key_t : noncopyable
 {
     db::database const & db;
     db::datatable const & table;
@@ -1095,7 +1097,13 @@ void trace_datatable(db::database const & db, db::datatable & table, cmd_option 
     enum { print_nextPage = 1 };
     enum { long_pageId = 0 };
     enum { alloc_pageType = 0 };
+    enum { find_record_iterator = 1000 };
 
+    auto const & exclude = db::make::util::split(opt.exclude); 
+    if (!exclude.empty() && db::make::util::is_find(exclude, table.name())) {
+        std::cout << "\ntrace_datatable exclude: " << table.name() << std::endl;
+        return;
+    }
     if (opt.alloc_page) {
         std::cout << "\nDATATABLE [" << table.name() << "]";
         std::cout << " [" << db::to_string::type(table.get_id()) << "]";
@@ -1151,6 +1159,23 @@ void trace_datatable(db::database const & db, db::datatable & table, cmd_option 
                         break;
                     std::cout << "\n[" << (row_index++) << "]";
                     trace_table_record(db, record, opt);
+                }
+                if (find_record_iterator) { // test API
+                    const auto pk = table.get_PrimaryKeyCol();
+                    if (pk.first) {
+                        size_t count = 0;
+                        for (auto const record : table._record) {
+                            auto const it = table.find_record_iterator(record.data_col(pk.second));
+                            if (it == table._record.end()) {
+                                SDL_TRACE("\nfind_record_iterator = ", record.type_col(pk.second));
+                                auto const it2 = table.find_record_iterator(record.data_col(pk.second));
+                                SDL_ASSERT(it != table._record.end());
+                            }
+                            SDL_ASSERT((*it).head() == record.head());
+                            if (find_record_iterator == ++count)
+                                break;
+                        }
+                    }
                 }
             }
         }
@@ -1611,8 +1636,9 @@ void trace_spatial_pages(db::database const & db, cmd_option const & opt)
             }
             std::cout << "\nspatial_pages = " << count_page << std::endl;
             if (test_spatial_index) {
-                if (auto tree = table->get_spatial_tree()) {
-                    
+                if (auto tree_ = table->get_spatial_tree()) {
+                    SDL_ASSERT(tree_.pk0_scalartype == db::scalartype::t_bigint);
+                    auto const tree = tree_.cast<int64>();                    
                     auto const min_page = tree->min_page();
                     auto const max_page = tree->max_page();
                     SDL_ASSERT(!min_page->data.prevPage);
@@ -1663,9 +1689,9 @@ void trace_spatial_pages(db::database const & db, cmd_option const & opt)
                         size_t page_count = 0;
                         size_t cell_count = 0;
                         size_t cell_match = 0;
-                        auto & tt = *tree;
                         db::bigint::spatial_key prev_key{};
-                        for (auto p : tt._datapage) {
+                        //auto & tt = *tree;
+                        for (auto p : tree->_datapage) {
                             SDL_ASSERT(p != nullptr);
                             if (page_count < 10) {
                                 auto const & pageId = p->head->data.pageId;
@@ -1689,7 +1715,7 @@ void trace_spatial_pages(db::database const & db, cmd_option const & opt)
                             << "\ncell_count = " << cell_count
                             << "\ncell_match = " << cell_match
                             << std::endl;
-                        for (auto it = tt._datapage.end(); it != tt._datapage.begin();) {
+                        for (auto it = tree->_datapage.end(); it != tree->_datapage.begin();) {
                              --page_count;
                             --it;
                              SDL_ASSERT(*it != nullptr);
@@ -2000,7 +2026,9 @@ void trace_spatial_search(db::database const & db, cmd_option const & opt)
 {
     if (!opt.tab_name.empty()) {
         if (auto table = db.find_table(opt.tab_name)) {
-            if (auto tree = table->get_spatial_tree()) {
+            if (auto tree_ = table->get_spatial_tree()) {
+                SDL_ASSERT(tree_.pk0_scalartype == db::scalartype::t_bigint);
+                auto tree = tree_.cast<int64>();
                 using pk0_type = db::bigint::spatial_page_row::pk0_type;
                 if (opt.latitude && opt.longitude) {
                     const db::spatial_point pos = db::spatial_point::init(db::Latitude(opt.latitude), db::Longitude(opt.longitude));
@@ -2008,7 +2036,7 @@ void trace_spatial_search(db::database const & db, cmd_option const & opt)
                     if (opt.depth && (opt.depth <= db::spatial_cell::size)) {
                         cell = db::spatial_cell::set_depth(cell, static_cast<uint8>(opt.depth));
                     }
-                    std::set<db::spatial_tree::pk0_type> found;
+                    std::set<db::bigint::spatial_tree::pk0_type> found;
                     tree->for_cell(cell, [&found](db::bigint::spatial_page_row const * const p) {
                         found.insert(p->data.pk0);
                         return bc::continue_;
@@ -2213,17 +2241,16 @@ void trace_index_for_table(db::database const & db, cmd_option const &)
 void maketables(db::database const & db, cmd_option const & opt)
 {
     if (!opt.out_file.empty()) {
-        SDL_TRACE(__FUNCTION__);
+        auto const & include = db::make::util::split(opt.include);
+        auto const & exclude = db::make::util::split(opt.exclude);
         if (opt.write_file) {
             db::make::generator::make_file_ex(db, opt.out_file,
-                db::make::util::split(opt.include),
-                db::make::util::split(opt.exclude),
-                db::make::util::extract_filename(db.filename(), true).c_str());
+                include, exclude,
+                db::make::util::extract_filename(db.filename(), true).c_str(),
+                opt.record_count);
         }
         else {
-            for (auto p : db._datatables) {
-                std::cout << db::make::generator::make_table(db, *p);
-            }
+            std::cout << db::make::generator::make_tables(db, include, exclude, opt.record_count);
         }
     }
 }
@@ -2353,6 +2380,7 @@ int run_main(cmd_option const & opt)
             << "\nexport_source = " << opt.export_.source   
             << "\nexport_dest = " << opt.export_.dest   
             << "\nprecision = " << opt.precision
+            << "\nrecord_count = " << opt.record_count
             << std::endl;
     }
     if (opt.precision) {
@@ -2500,6 +2528,7 @@ int run_main(int argc, char* argv[])
     cmd.add(make_option(0, opt.export_.source, "export_source"));
     cmd.add(make_option(0, opt.export_.dest, "export_dest"));
     cmd.add(make_option(0, opt.precision, "precision"));    
+    cmd.add(make_option(0, opt.record_count, "record_count"));
 
     try {
         if (argc == 1) {
@@ -2531,12 +2560,12 @@ int main(int argc, char* argv[])
     }
     catch (sdl_exception & e) {
         (void)e;
-        SDL_TRACE(typeid(e).name(), " = ", e.what());
+        std::cout << "\ncatch exception [" << typeid(e).name() << "] = " << e.what();
         SDL_ASSERT(0);
     }
     catch (std::exception & e) {
         (void)e;
-        SDL_TRACE("exception = ", e.what());
+        std::cout << "\ncatch std::exception = " << e.what();
         SDL_ASSERT(0);
     }
 }

@@ -30,6 +30,11 @@ std::string type_raw_bytes(char const(&buf)[buf_size]) {
     return type_raw_bytes(buf, buf_size);
 }
 
+template<class T> inline 
+std::string type_raw_bytes(T const & v) {
+    return type_raw_bytes(&v, sizeof(v));
+}
+
 std::string type_raw_buf(void const * _buf, size_t const buf_size, bool const show_address)
 {
     char const * buf = (char const *)_buf;
@@ -271,9 +276,25 @@ const char * to_string::type_name(spatial_type const t)
     case spatial_type::linesegment      : return "linesegment";
     case spatial_type::multilinestring  : return "multilinestring";
     case spatial_type::multipolygon     : return "multipolygon";
-    //multipoint,
+    //FIXME: spatial_type::multipoint
     default:
         SDL_ASSERT(t == spatial_type::null);
+        return ""; // unknown type
+    }
+}
+
+const char * to_string::type_name(geometry_types const t)
+{
+    switch (t) {
+    case geometry_types::Point              : return "Point";
+    case geometry_types::LineString         : return "LineString";
+    case geometry_types::Polygon            : return "Polygon";
+    case geometry_types::MultiPoint         : return "MultiPoint";
+    case geometry_types::MultiLineString    : return "MultiLineString";
+    case geometry_types::MultiPolygon       : return "MultiPolygon";
+    case geometry_types::GeometryCollection : return "GeometryCollection";
+    default:
+        SDL_ASSERT(t == geometry_types::Unknown);
         return ""; // unknown type
     }
 }
@@ -362,17 +383,25 @@ std::string to_string::type_raw(char const * buf, size_t const buf_size, type_fo
 
 std::string to_string::dump_mem(void const * buf, size_t const buf_size)
 {
-    if (buf_size)
-        return type_raw_bytes(buf, buf_size);
+    if (buf_size) {
+        std::string s("dump(");
+        s += type_raw_bytes(buf, buf_size);
+        s += ")";
+        return s;
+    }
     return{};
 }
 
 std::string to_string::dump_mem(vector_mem_range_t const & data)
 {
-    std::string s;
-    for (auto & m : data) {
-        s += dump_mem(m);
+    if (mem_empty(data)) {
+        return{};
     }
+    std::string s("dump(");
+    for (auto & m : data) {
+        s += type_raw_bytes(m);
+    }
+    s += ")";
     return s;
 }
 
@@ -590,20 +619,16 @@ std::string to_string::type(nchar_range const & p, const type_format f)
 
 std::string to_string::type(datetime_t const & src)
 {
-    if (src.is_valid()) {
-        time_t temp = static_cast<time_t>(src.get_unix_time());
-        struct tm struct_tm;
-        if (time_util::safe_gmtime(struct_tm, temp)) {
-            char tmbuf[128]{};
-            const size_t c = strftime(tmbuf, sizeof(tmbuf), "%Y-%m-%d %H:%M:%S", &struct_tm);
-            SDL_ASSERT(c + 5 <= sizeof(tmbuf));// 5 more bytes will be added
-            // print milliseconds obtained from 1/300 second ticks
-            snprintf(tmbuf + c, sizeof(tmbuf) - c, ".%03u", (src.t % 300) * 1000 / 300);
-            return std::string(tmbuf);
-        }
+    if (src.is_null()) {
+        return {};
     }
-    SDL_ASSERT(src.is_null());
-    return std::string();
+    const gregorian_t d = src.gregorian();
+    const clocktime_t t = src.clocktime();
+    char tmbuf[128];
+    format_s(tmbuf, "%d-%02d-%02d %02d:%02d:%02d.%03d",
+        d.year, d.month, d.day,
+        t.hour, t.min, t.sec, t.milliseconds);
+    return std::string(tmbuf);
 }
 
 std::string to_string::type(smalldatetime_t const d)
@@ -707,7 +732,9 @@ std::string to_string::type(auid_t const & id)
         << " ("
         << std::uppercase << std::dec
         << id._64
-        << ")";
+        << ") auid.id = " << int(id.d.id)
+        << " hi = " << int(id.d.hi)
+        ;
     return ss.str();
 }
 
@@ -944,33 +971,17 @@ std::string type_geo_pointarray(geo_pointarray const & data, const char * title,
     return ss.str();
 }
 
-std::string type_geo_multi(geo_mem const & data)//, const char * const title)
+std::string type_multi_geometry(geo_mem const & data, const char * const title)
 {
-    const char * title = "";
-    bool multipolygon = false;
-    if (data.type() == spatial_type::multilinestring) {
-        title = "MULTILINESTRING";
-    }
-    else if (data.type() == spatial_type::multipolygon) {
-        multipolygon = data.multiple_exterior();
-        title = multipolygon ? "MULTIPOLYGON" : "POLYGON";
-    }
-    else {
-        SDL_ASSERT(0);
-    }
-    const auto &orient = data.ring_orient();
     to_string::stringstream ss;
     ss << title << " (";
     const size_t numobj = data.numobj();
     SDL_ASSERT(numobj);
-    SDL_ASSERT(orient.size() == numobj);
     for (size_t i = 0; i < numobj; ++i) {
         auto const pp = data.get_subobj(i);
         SDL_ASSERT(pp.size());
-        if (i) {
-            ss << ", ";
-        }
-        ss << (multipolygon && is_exterior(orient[i]) ? "((" : "(");
+        if (i) { ss << ", "; }
+        ss << "(";
         size_t count = 0;
         for (auto const & p : pp) {
             if (count++) {
@@ -978,8 +989,48 @@ std::string type_geo_multi(geo_mem const & data)//, const char * const title)
             }
             ss << p.longitude << ' ' << p.latitude;
         }
-        const bool last_ring_in_polygon = multipolygon && ((i == numobj - 1) || is_exterior(orient[i + 1]));
-        ss << (last_ring_in_polygon ? "))" : ")");
+        ss << ")";
+    }
+    ss << ")";
+    return ss.str();
+}
+
+inline std::string type_MultiLineString(geo_mem const & data) {
+    SDL_ASSERT(data.type() == spatial_type::multilinestring);
+    SDL_ASSERT(data.STGeometryType() == geometry_types::MultiLineString);
+    return type_multi_geometry(data, "MULTILINESTRING");
+}
+
+std::string type_MultiPolygon(geo_mem const & data)
+{
+    SDL_ASSERT(data.type() == spatial_type::multipolygon);
+    if (data.STGeometryType() == geometry_types::Polygon) {
+        return type_multi_geometry(data, "POLYGON");
+    }
+    SDL_ASSERT(data.STGeometryType() == geometry_types::MultiPolygon);
+    to_string::stringstream ss;
+    ss << "MULTIPOLYGON (";
+    const size_t numobj = data.numobj();
+    const auto & orient = data.ring_orient();
+    SDL_ASSERT(numobj && (orient.size() == numobj));
+    if (orient.size() == numobj) {
+        for (size_t i = 0; i < numobj; ++i) {
+            auto const pp = data.get_subobj(i);
+            SDL_ASSERT(pp.size());
+            if (i) {
+                ss << ", ";
+            }
+            ss << (is_exterior(orient[i]) ? "((" : "(");
+            size_t count = 0;
+            for (auto const & p : pp) {
+                if (count++) {
+                    ss << ", ";
+                }
+                ss << p.longitude << ' ' << p.latitude;
+            }
+            const bool last_ring_in_polygon = (i == (numobj - 1)) || is_exterior(orient[i + 1]);
+            ss << (last_ring_in_polygon ? "))" : ")");
+        }
     }
     ss << ")";
     return ss.str();
@@ -999,10 +1050,10 @@ std::string to_string::type(geo_mem const & data)
     case spatial_type::linestring:      return type_geo_pointarray(*data.cast_linestring(), "LINESTRING");
     case spatial_type::polygon:         return type_geo_pointarray(*data.cast_polygon(), "POLYGON", true);
     case spatial_type::linesegment:     return type(*data.cast_linesegment());
-    case spatial_type::multilinestring: return type_geo_multi(data);
-    case spatial_type::multipolygon:    return type_geo_multi(data);
+    case spatial_type::multilinestring: return type_MultiLineString(data);
+    case spatial_type::multipolygon:    return type_MultiPolygon(data);
     default:
-        SDL_ASSERT(0);
+        SDL_ASSERT(data.type() == spatial_type::null);
         break;
     }
     return{};
@@ -1023,14 +1074,15 @@ namespace sdl {
                 {
                     SDL_TRACE_FILE;
                     datetime_t d1 = {};
-                    d1.d = 42003; // = SELECT DATEDIFF(d, '19000101', '20150101');
-                    d1.t = 300;
+                    SDL_ASSERT(to_string::type(d1).empty());
+                    d1.days = 42003; // = SELECT DATEDIFF(d, '19000101', '20150101');
+                    d1.ticks = 300;
                     //SDL_ASSERT(to_string::type(d1) == "2015-01-01 00:00:01");
                     SDL_ASSERT(to_string::type(d1) == "2015-01-01 00:00:01.000");
-                    auto const ut = datetime_t::get_unix_time(d1);
+                    auto const ut = d1.get_unix_time();
                     const datetime_t d2 = datetime_t::set_unix_time(ut);
-                    SDL_ASSERT(d1.d == d2.d);
-                    SDL_ASSERT(d1.t == d2.t);
+                    SDL_ASSERT(d1.days == d2.days);
+                    SDL_ASSERT(d1.ticks == d2.ticks);
                     {
                         static_assert(binary<1>::value == 1, "");
                         static_assert(binary<11>::value == 3, "");
@@ -1050,6 +1102,7 @@ namespace sdl {
                     if (0) {
                         SDL_TRACE("datetime = ", to_string::type(datetime_t::set_unix_time(1474363553)));
                     }
+                    //FIXME: std::chrono::time_point (since C++11) 
                 }
             };
             static unit_test s_test;

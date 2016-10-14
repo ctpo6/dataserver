@@ -154,6 +154,7 @@ private:
     }
 #endif
 public:
+#if 0
     static size_t remain(size_t const x, size_t const y) {
         size_t const d = x % y;
         return d ? (y - d) : 0;
@@ -162,6 +163,19 @@ public:
         SDL_ASSERT(x >= 0);
         size_t const d = a_max(static_cast<size_t>(x + 0.5), y); 
         return d + remain(d, y); 
+    }
+#endif
+    template<size_t const y>
+    static size_t remain(size_t const x) {
+        static_assert(y && is_power_2<y>::value, "");
+        size_t const d = x & (y - 1);
+        return d ? (y - d) : 0;
+    }
+    template<size_t const y>
+    static size_t roundup(double const x) {
+        SDL_ASSERT(x >= 0);
+        size_t const d = a_max(static_cast<size_t>(x + 0.5), y); 
+        return d + remain<y>(d); 
     }
     static const double order_quadrant[quadrant_size];
     static const double sorted_quadrant[quadrant_size]; // longitudes
@@ -1065,7 +1079,7 @@ void math::poly_range(buf_sector & cross, buf_2D & result,
     enum { meter_error = 5 };
     enum { min_num = 32 };
     const double degree = limits::RAD_TO_DEG * radius.value() / limits::EARTH_RADIUS;
-    const size_t num = math::roundup(degree * 32, min_num); //FIXME: experimental
+    const size_t num = math::roundup<min_num>(degree * 32); //FIXME: experimental
     SDL_ASSERT(num && !(num % min_num));
     const double bx = 360.0 / num;
     SDL_ASSERT(frange(bx, 1.0, 360.0 / min_num));
@@ -1258,16 +1272,18 @@ void math::fill_poly(interval_cell & result,
                      point_2D const * const verts_2D_end,
                      spatial_grid const grid)
 {
-    using namespace rasterization_;
     SDL_ASSERT(verts_2D < verts_2D_end);
     rect_XY bbox;
-    rect_2D bbox_2D;
-    math_util::get_bbox(bbox_2D, verts_2D, verts_2D_end);
-    rasterization(bbox, bbox_2D, grid);
+    {
+        using namespace rasterization_;
+        rect_2D bbox_2D;
+        math_util::get_bbox(bbox_2D, verts_2D, verts_2D_end);
+        rasterization(bbox, bbox_2D, grid);
+    }
     std::vector<vector_buf<int, 4>> scan_lines(bbox.height() + 2);
     { // plot contour
-        const size_t verts_size = verts_2D_end - verts_2D;
         enum { scale_id = 4 }; // experimental
+        const size_t verts_size = verts_2D_end - verts_2D;
         constexpr int max_id = grid.s_3() * scale_id; // 65536 * 4 = 262144
         XY old_point { -1, -1 };
         for (size_t i = 0, j = verts_size - 1; i < verts_size; j = i++) {
@@ -1275,17 +1291,10 @@ void math::fill_poly(interval_cell & result,
             point_2D const & p2 = verts_2D[i];
             { // plot_line(p1, p2)
                 using namespace globe_to_cell_; 
-#if high_grid_optimization
                 int x0 = min_max<max_id - 1>(max_id * p1.X);
                 int y0 = min_max<max_id - 1>(max_id * p1.Y);
                 const int x1 = min_max<max_id - 1>(max_id * p2.X);
                 const int y1 = min_max<max_id - 1>(max_id * p2.Y);   
-#else
-                int x0 = min_max(max_id * p1.X, max_id - 1);
-                int y0 = min_max(max_id * p1.Y, max_id - 1);
-                const int x1 = min_max(max_id * p2.X, max_id - 1);
-                const int y1 = min_max(max_id * p2.Y, max_id - 1);   
-#endif
                 const int dx = a_abs(x1 - x0);
                 const int dy = -a_abs(y1 - y0);
                 const int sx = (x0 < x1) ? 1 : -1;
@@ -1578,6 +1587,18 @@ bool transform::STIntersects(spatial_rect const & rc,
     }
     SDL_ASSERT(flag == intersect_type::linestring);
     return math_util::linestring_intersect(first, end, rc); //FIXME: long distance on sphere
+}
+
+Meters transform::STLength(spatial_point const * first, spatial_point const * end)
+{
+    SDL_ASSERT(first < end);
+    Meters length = 0;
+    for (auto old = first++; first < end; ++first) {
+        SDL_ASSERT((first - old) == 1);
+        length += math::haversine(*old, *first);
+        old = first;
+    }
+    return length;
 }
 
 } // db

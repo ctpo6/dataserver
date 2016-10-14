@@ -106,19 +106,6 @@ inline recordID datatable::datarow_access::get_id(iterator const & it)
 //----------------------------------------------------------------------
 
 inline datatable::head_access::iterator
-datatable::head_access::begin() const
-{
-    datarow_iterator it = _datarow.begin();
-    while (it != _datarow.end()) {
-        if (head_access::use_record(it))
-            break;
-        ++it;
-    }
-    return iterator(this, std::move(it));
-}
-
-
-inline datatable::head_access::iterator
 datatable::head_access::end() const
 {
     return iterator(this, _datarow.end());
@@ -211,15 +198,39 @@ template<typename pk0_type> unique_spatial_tree_t<pk0_type>
 datatable::get_spatial_tree(identity<pk0_type>) const {
     if (auto const tree = this->find_spatial_tree()) {
         if (auto const pk0 = this->get_PrimaryKey()) {
-            if ((1 == pk0->size()) && (pk0->first_type() == key_to_scalartype<pk0_type>::value)) {
-                return sdl::make_unique<spatial_tree_t<pk0_type>>(this->db, tree.pgroot, pk0, tree.idx);
-            }
-            SDL_ASSERT(!"not implemented");
+            SDL_ASSERT(pk0->first_type() == key_to_scalartype<pk0_type>::value);
+            return sdl::make_unique<spatial_tree_t<pk0_type>>(this->db, tree.pgroot, pk0, tree.idx);
         }
-        SDL_ASSERT(0);
+        SDL_ASSERT(!"get_spatial_tree");
     }
     return{};
 }
+
+template<class T, class fun_type>
+void datatable::for_datarow(T && data, fun_type && fun) {
+    A_STATIC_ASSERT_TYPE(datarow_access, remove_reference_t<T>);
+    for (row_head const * row : data) {
+        if (row) { 
+            fun(*row);
+        }
+    }
+}
+
+//----------------------------------------------------------------------
+
+inline datatable::record_type
+datatable::find_record(vector_mem_range_t const & v) const {
+    auto buf = make_vector(v);
+    return find_record(make_mem_range(buf));
+} 
+
+inline datatable::record_iterator
+datatable::find_record_iterator(vector_mem_range_t const & v) const {
+    auto buf = make_vector(v);
+    return find_record_iterator(make_mem_range(buf));
+}
+
+//----------------------------------------------------------------------
 
 } // db
 } // sdl

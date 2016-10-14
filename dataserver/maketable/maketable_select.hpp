@@ -27,8 +27,8 @@ struct SEARCH_WHERE
     enum { offset = i };
     using type = T;
     using col = typename T::col;
-    static const operator_ OP = op;
-    static const condition cond = T::cond;
+    static constexpr operator_ OP = op;
+    static constexpr condition cond = T::cond;
 };
 
 //--------------------------------------------------------------
@@ -41,12 +41,12 @@ struct index_hint<T, true> { // allow INDEX::IGNORE|AUTO for any col
     static_assert((T::hint != where_::INDEX::USE) || (T::col::PK || T::col::spatial_key), "INDEX::USE need primary key or spatial index");
     static_assert((T::hint != where_::INDEX::USE) || (T::col::key_pos == 0), "INDEX::USE need key_pos 0");
     static_assert((T::hint != where_::INDEX::USE) || (T::cond != condition::NOT), "INDEX::USE cannot be used with condition::NOT");
-    static const where_::INDEX hint = T::hint;
+    static constexpr where_::INDEX hint = T::hint;
 };
 
 template<class T>
 struct index_hint<T, false> {
-    static const where_::INDEX hint = where_::INDEX::AUTO;
+    static constexpr where_::INDEX hint = where_::INDEX::AUTO;
 };
 
 //--------------------------------------------------------------
@@ -441,6 +441,10 @@ private:
     template<class record, class expr_type> static bool select(record const & p, expr_type const * const expr, condition_t<condition::STContains>);
     template<class record, class expr_type> static bool select(record const & p, expr_type const * const expr, condition_t<condition::STIntersects>);
     template<class record, class expr_type> static bool select(record const & p, expr_type const * const expr, condition_t<condition::STDistance>);
+    template<class record, class expr_type> static bool select(record const & p, expr_type const * const expr, condition_t<condition::STLength>);
+    template<class record, class expr_type> static bool select(record const & p, expr_type const * const expr, condition_t<condition::ALL>) {
+        return true;
+    }
 public:
     template<class record, class sub_expr_type> static
     bool select(record const & p, sub_expr_type const & expr) {
@@ -530,9 +534,20 @@ template<class T>
 template<class record, class expr_type> inline
 bool RECORD_SELECT<T>::select(record const & p, expr_type const * const expr, condition_t<condition::STDistance>) {
     static_assert(T::col::type == scalartype::t_geography, "STDistance need t_geography");
+    A_STATIC_CHECK_TYPE(Meters, expr->value.values.second);
     return DISTANCE::compare(
         p.val(identity<typename T::col>{}).STDistance(expr->value.values.first), 
         expr->value.values.second, where_::compare_t<T::type::comp>());
+}
+
+template<class T>
+template<class record, class expr_type> inline
+bool RECORD_SELECT<T>::select(record const & p, expr_type const * const expr, condition_t<condition::STLength>) {
+    static_assert(T::col::type == scalartype::t_geography, "STLength need t_geography");
+    A_STATIC_CHECK_TYPE(Meters, expr->value.values);
+    return DISTANCE::compare(
+        p.val(identity<typename T::col>{}).STLength(), 
+        expr->value.values, where_::compare_t<T::type::comp>());
 }
 
 //--------------------------------------------------------------
@@ -814,8 +829,9 @@ private:
     static_assert(CHECK_ORDER<ORDER_2>::value, "SELECT_ORDER_TYPE");
     using cluster_type = typename order_cluster<ORDER_2>::Result;
     enum { scan_table = IS_SCAN_TABLE<sub_expr_type>::value };
-    enum { remove_order = scan_table && (TL::IndexOf<ORDER_2, cluster_type>::value == 0) && (TL::Length<ORDER_2>::value == 1) };
-    using ORDER_3 = Select_t<remove_order, NullType, ORDER_2>; // can remove ORDER_BY if scan table and (ORDER_BY sort order) == (cluster index sort order)
+    enum { cluster_order = (TL::IndexOf<ORDER_2, cluster_type>::value == 0) && (TL::Length<ORDER_2>::value == 1) };
+    enum { remove_order = scan_table && cluster_order };
+    using ORDER_3 = Select_t<remove_order, NullType, ORDER_2>;
 public:
     using Result = ORDER_3;
 };
@@ -831,11 +847,11 @@ class SCAN_TABLE final : noncopyable {
     using search_OR = search_operator_t<operator_::OR, SEARCH>;
     static_assert(TL::Length<search_OR>::value, "empty OR");
 
-    static bool has_limit(std::false_type) {
+    static bool has_limit(bool, std::false_type) {
         return false;
     }
-    bool has_limit(std::true_type) const {
-        return m_limit <= m_result.size();
+    bool has_limit(bool check, std::true_type) const {
+        return check && (m_limit <= m_result.size());
     }
     bool is_select(record const & p) const {
         return
@@ -868,7 +884,7 @@ void SCAN_TABLE<record_range, query_type, sub_expr_type, is_limit>::select() {
             if (push_result.first == bc::break_) {
                 return false;
             }
-            if (push_result.second && has_limit(bool_constant<is_limit>{}))
+            if (has_limit(push_result.second, bool_constant<is_limit>{}))
                 return false;
         }
         return true;
@@ -1190,7 +1206,7 @@ make_query<this_table, _record>::seek_table::scan_if(query_type & query, expr_ty
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
-
+#if 0  // moved to algorithm.h
 template<class T, class key_type>
 bool binary_insertion(T & result, key_type && unique_key) {
     if (!result.empty()) {
@@ -1206,6 +1222,7 @@ bool binary_insertion(T & result, key_type && unique_key) {
     result.push_back(std::forward<key_type>(unique_key)); 
     return true;
 }
+#endif
 
 template<class this_table, class _record> 
 class make_query<this_table, _record>::seek_spatial final : is_static

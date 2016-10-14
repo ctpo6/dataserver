@@ -61,7 +61,7 @@ struct array_t { // fixed-size array of elements of type T
 };
 
 template<class T>
-class unique_vec {
+class unique_vec : noncopyable {
 public:
     using vector_type = std::vector<T>;
     unique_vec() = default;
@@ -108,8 +108,6 @@ public:
 	vector_type const * operator->() const {
         return get();
     }
-    unique_vec(const unique_vec&) = delete;
-    unique_vec& operator=(const unique_vec&) = delete;
 private:
     mutable std::unique_ptr<vector_type> m_p;
 };
@@ -118,7 +116,7 @@ template<class T, size_t N>
 class vector_buf : noncopyable {
     using buf_type = array_t<T, N>;
     using vec_type = unique_vec<T>;
-    size_t m_size;
+    size_t m_size; //note: could use pair m_begin, m_end to speed up operator[]
     vec_type m_vec;
     buf_type m_buf;
 public:
@@ -254,7 +252,9 @@ public:
     void emplace_back(Ts&&... params) {
         this->push_back(T{std::forward<Ts>(params)...});
     }
-    void push_sorted(const T &);
+    void push_sorted(const T & value) {
+        algo::insertion_sort(*this, value);
+    }
     template<class fun_type>
     void sort(fun_type comp) {
         std::sort(begin(), end(), comp);
@@ -328,24 +328,6 @@ void vector_buf<T, N>::push_back(const T & value) {
         SDL_ASSERT(capacity() >= m_size);
         SDL_ASSERT(!use_buf());
     }
-}
-
-template<class T, size_t N>
-void vector_buf<T, N>::push_sorted(const T & value) {
-    push_back(value);
-    iterator const left = begin();
-    iterator right = end() - 1;
-    while (right > left) {
-        if (*right < *(right - 1)) {
-            std::swap(*right, *(right - 1));
-            --right;
-        }
-        else {
-            break;
-        }
-    }
-    SDL_ASSERT(left <= right);
-    SDL_ASSERT(std::is_sorted(cbegin(), cend()));
 }
 
 template<class T, size_t N>
