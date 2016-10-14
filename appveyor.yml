@@ -11,6 +11,10 @@ clone_depth: 1
 
 image: Visual Studio 2015
 
+environment:
+  BOOST_ROOT: C:\Libraries\boost_1_60_0
+  BOOST_LIBRARYDIR: C:\Libraries\boost_1_60_0\lib64-msvc-14.0
+
 configuration: Debug
 
 install:
