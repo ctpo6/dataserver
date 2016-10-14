@@ -1,4 +1,8 @@
+sudo: false
 language: cpp
+
+cache:
+  apt: true
 
 branches:
   only:
@@ -11,7 +15,7 @@ os:
 addons:
   apt:
     packages:
-    - libboost-all-dev
+    - libboost1.55-all-dev
 
 
 compiler: clang++
