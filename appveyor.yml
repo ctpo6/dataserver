@@ -20,17 +20,18 @@ build_script:
 - mkdir build
 - cd build
 - cmake -G "Visual Studio 14 Win64" ..
-- cmake --build .
+- cmake --build . --config Debug
 - cd ..
 - mkdir datasets
 - curl -o datasets/set1.mdf https://sdlpublic.blob.core.windows.net/datasets/set1.mdf
 - .\bin\Debug\test_dataserver.exe -i .\datasets\set1.mdf -b 0 -s 0 -u 1 -a 1 -r 10 -v 2 -x 40 -q 0 -j -1 -o .\datasets\$$$.h -w 0 --internal 0 --index_for_table 1
 
 test_script:
-- git clone https://github.com/ctpo6/dataserver_ci_test.git test
+- git clone https://github.com/ctpo6/dataserver_dump_mdf.git test
 - cd test
 - mkdir build
 - cd build
 - cmake -G "Visual Studio 14 Win64" -DDATASERVER_DIR=c:\work\dataserver ..
-- cmake --build .
-- ctest -V -C debug
+- cmake --build . --config Debug
+- Debug\mdfd.exe -m c:\work\dataserver\test\mdf\TestDataserver.mdf --codepage cp1251 2>TestDataserver.txt
+- fc TestDataserver.txt c:\work\dataserver\test\mdf\TestDataserver.txt
