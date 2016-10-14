@@ -1,4 +1,6 @@
-sudo: false
+sudo: required
+dist: trusty
+
 language: cpp
 
 cache:
@@ -15,7 +17,7 @@ os:
 addons:
   apt:
     packages:
-    - libboost1.55-all-dev
+    - libboost-all-dev
 
 
 compiler: clang++
