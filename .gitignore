@@ -21,6 +21,7 @@ build/
 bld/
 [Bb]in/
 [Oo]bj/
+[Ll]ib/
 dataserver/system/version.h
 dataserver/usertables/
 dataserver/spatial/geography/
