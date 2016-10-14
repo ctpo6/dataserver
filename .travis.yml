@@ -8,6 +8,12 @@ os:
 - linux
 - osx
 
+addons:
+  apt:
+    packages:
+    - libboost-all-dev
+
+
 compiler: clang++
 
 script:
